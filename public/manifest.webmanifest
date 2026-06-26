@@ -1,0 +1,9 @@
+{
+  "name": "OOXii Assist PoC",
+  "short_name": "OOXii Assist",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#17081f",
+  "theme_color": "#251033",
+  "description": "Offline-first multilingual guided testing companion."
+}

@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #17081f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: #17081f;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.14), transparent 36rem),
+    radial-gradient(circle at bottom right, rgba(216, 180, 254, 0.12), transparent 40rem),
+    #17081f;
+  color: #f8f4ff;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #7dd3fc;
+  outline-offset: 3px;
+}
+
+@layer components {
+  .field-card {
+    @apply rounded-3xl border border-field-line/70 bg-field-card/90 p-5 shadow-field backdrop-blur;
+  }
+
+  .field-input {
+    @apply w-full rounded-2xl border border-field-line bg-field-surface px-4 py-3 text-base text-white placeholder:text-field-muted focus:border-field-accent;
+  }
+
+  .field-label {
+    @apply mb-2 block text-sm font-semibold text-purple-100;
+  }
+
+  .primary-button {
+    @apply rounded-2xl bg-sky-200 px-5 py-3 text-base font-bold text-field-ink transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .secondary-button {
+    @apply rounded-2xl border border-field-line bg-field-surface px-5 py-3 text-base font-bold text-white transition hover:bg-field-card disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .danger-button {
+    @apply rounded-2xl bg-red-200 px-5 py-3 text-base font-bold text-red-950 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .status-pill {
+    @apply inline-flex items-center rounded-full border border-field-line bg-field-surface px-3 py-1 text-xs font-bold uppercase tracking-wide text-purple-100;
+  }
+}
