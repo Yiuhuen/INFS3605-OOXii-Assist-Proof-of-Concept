@@ -4,7 +4,76 @@
 
 :root {
   color-scheme: dark;
-  background: #17081f;
+
+  /* Core surfaces */
+  --bg-ink: #150c1f;
+  --bg-deep: #100819;
+  --bg-surface: #1c1226;
+  --bg-card: #201530;
+  --line: #352842;
+  --text: #f4eefb;
+  --muted: #a898bb;
+
+  /* Primary (warm gold) */
+  --gold: #ecc568;
+  --gold-strong: #e8b94e;
+  --gold-ink: #1c1024;
+  --gold-tint: rgba(236, 197, 104, 0.14);
+
+  /* Semantic */
+  --good: #7fe3a0;
+  --good-bg: rgba(127, 227, 160, 0.12);
+  --warn: #f0b76d;
+  --warn-bg: #2a1a14;
+  --warn-border: #5c3a24;
+  --danger: #f2937f;
+  --danger-bg: #2a1414;
+  --danger-border: #5c2a24;
+  --record: #dd5240;
+  --record-strong: #c8442f;
+
+  /* Fixed semantic badges (not affected by contrast theme) */
+  --eye-right-bg: #232f5c;
+  --eye-right-text: #cfdcff;
+  --eye-right-dot: #5b82ff;
+  --eye-left-bg: #efe7f6;
+  --eye-left-text: #241633;
+  --lang-bg: #291f42;
+  --lang-text: #cdb8ea;
+}
+
+:root[data-contrast="high-contrast"] {
+  --bg-ink: #0a0510;
+  --bg-deep: #060309;
+  --bg-surface: #190f22;
+  --bg-card: #1d1128;
+  --line: #6c5480;
+  --text: #ffffff;
+  --muted: #d8cbe6;
+  --gold: #ffd873;
+  --gold-strong: #ffcc4d;
+  --gold-ink: #140a1c;
+}
+
+:root[data-contrast="warm"] {
+  --bg-ink: #1c1210;
+  --bg-deep: #150d0b;
+  --bg-surface: #291b16;
+  --bg-card: #32221b;
+  --line: #5c4032;
+  --text: #fbeee2;
+  --muted: #cbaf9d;
+  --gold: #f0b25a;
+  --gold-strong: #e8a23e;
+  --gold-ink: #201007;
+}
+
+:root[data-brightness="low"] {
+  filter: brightness(0.84);
+}
+
+:root[data-brightness="high"] {
+  filter: brightness(1.14);
 }
 
 * {
@@ -13,18 +82,15 @@
 
 html {
   min-height: 100%;
-  background: #17081f;
+  background: var(--bg-ink);
 }
 
 body {
   min-height: 100%;
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(125, 211, 252, 0.14), transparent 36rem),
-    radial-gradient(circle at bottom right, rgba(216, 180, 254, 0.12), transparent 40rem),
-    #17081f;
-  color: #f8f4ff;
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-ink);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, Helvetica, sans-serif;
 }
 
 button,
@@ -39,36 +105,224 @@ a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid #7dd3fc;
-  outline-offset: 3px;
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
 }
 
 @layer components {
+  /* Surfaces */
   .field-card {
-    @apply rounded-3xl border border-field-line/70 bg-field-card/90 p-5 shadow-field backdrop-blur;
+    border-radius: 1.25rem;
+    border: 1px solid var(--line);
+    background: var(--bg-card);
+    padding: 1.25rem;
   }
 
+  .field-card-soft {
+    border-radius: 1.25rem;
+    background: var(--bg-surface);
+    padding: 1.25rem;
+  }
+
+  .ink-panel {
+    border-radius: 1rem;
+    padding: 1.1rem;
+    background: var(--bg-deep);
+  }
+
+  /* Inputs */
   .field-input {
-    @apply w-full rounded-2xl border border-field-line bg-field-surface px-4 py-3 text-base text-white placeholder:text-field-muted focus:border-field-accent;
+    @apply w-full rounded-xl px-4 py-3 text-base placeholder:opacity-50 focus:outline-none;
+    border: 1px solid var(--line);
+    background: var(--bg-surface);
+    color: var(--text);
+  }
+
+  .field-input:focus {
+    border-color: var(--gold);
+  }
+
+  .field-input:disabled {
+    opacity: 0.5;
   }
 
   .field-label {
-    @apply mb-2 block text-sm font-semibold text-purple-100;
+    @apply mb-2 block text-sm font-semibold;
+    color: var(--muted);
   }
 
+  /* Buttons */
   .primary-button {
-    @apply rounded-2xl bg-sky-200 px-5 py-3 text-base font-bold text-field-ink transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
+    background: var(--gold);
+    color: var(--gold-ink);
+  }
+
+  .primary-button:hover:not(:disabled) {
+    background: var(--gold-strong);
+  }
+
+  .primary-button-lg {
+    @apply primary-button w-full py-4 text-lg;
   }
 
   .secondary-button {
-    @apply rounded-2xl border border-field-line bg-field-surface px-5 py-3 text-base font-bold text-white transition hover:bg-field-card disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
+    border: 1px solid var(--line);
+    background: var(--bg-surface);
+    color: var(--text);
+  }
+
+  .secondary-button:hover:not(:disabled) {
+    background: var(--bg-card);
+  }
+
+  .record-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-4 text-lg font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40;
+    background: var(--record);
+  }
+
+  .record-button:hover:not(:disabled) {
+    background: var(--record-strong);
   }
 
   .danger-button {
-    @apply rounded-2xl bg-red-200 px-5 py-3 text-base font-bold text-red-950 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40;
+    background: var(--record);
   }
 
+  .danger-button:hover:not(:disabled) {
+    background: var(--record-strong);
+  }
+
+  /* Badges */
   .status-pill {
-    @apply inline-flex items-center rounded-full border border-field-line bg-field-surface px-3 py-1 text-xs font-bold uppercase tracking-wide text-purple-100;
+    @apply inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide;
+    border: 1px solid var(--line);
+    background: var(--bg-surface);
+    color: var(--muted);
+  }
+
+  .badge-warn {
+    @apply status-pill;
+    border-color: var(--warn-border);
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+
+  .badge-good {
+    @apply status-pill;
+    border-color: #2f5f42;
+    background: var(--good-bg);
+    color: var(--good);
+  }
+
+  .badge-danger {
+    @apply status-pill;
+    border-color: var(--danger-border);
+    background: var(--danger-bg);
+    color: var(--danger);
+  }
+
+  .badge-eye-right {
+    @apply status-pill normal-case tracking-normal;
+    border-color: transparent;
+    background: var(--eye-right-bg);
+    color: var(--eye-right-text);
+  }
+
+  .badge-eye-left {
+    @apply status-pill normal-case tracking-normal;
+    border-color: transparent;
+    background: var(--eye-left-bg);
+    color: var(--eye-left-text);
+  }
+
+  .badge-language {
+    @apply status-pill normal-case tracking-normal;
+    border-color: transparent;
+    background: var(--lang-bg);
+    color: var(--lang-text);
+  }
+
+  /* The client-facing question is the single most important thing on the
+     recording screen, so it gets its own gold-bordered card that nothing
+     else on the page competes with. */
+  .prompt-card {
+    border-radius: 1.5rem;
+    border: 2px solid var(--gold);
+    background: var(--bg-deep);
+    padding: 1.5rem;
+  }
+
+  /* Subdued version of .prompt-card for the guided-prompt (preview) screen,
+     where the manual entry fields are the primary task, not the prompt. */
+  .prompt-card-preview {
+    border-radius: 1.5rem;
+    border: 1px solid var(--line);
+    background: var(--bg-card);
+    padding: 1.5rem;
+  }
+
+  .warning-card {
+    @apply flex items-start gap-3 rounded-2xl p-4 text-sm;
+    border: 1px solid var(--warn-border);
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+
+  .info-card {
+    @apply flex items-start gap-3 rounded-2xl p-4 text-sm;
+    border: 1px solid var(--line);
+    background: var(--bg-surface);
+    color: var(--muted);
+  }
+
+  /* Action grid tiles (dashboard) */
+  .action-card {
+    @apply relative flex flex-col items-start gap-3 rounded-2xl p-4 text-left transition;
+    border: 1px solid var(--line);
+    background: var(--bg-card);
+  }
+
+  .action-card:hover {
+    background: var(--bg-surface);
+  }
+
+  .action-card-badge {
+    @apply absolute right-3 top-3 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1 text-[11px] font-bold text-white;
+    background: var(--record);
+  }
+
+  /* Progress bar (training) */
+  .progress-track {
+    @apply flex-1 rounded-full;
+    height: 0.4rem;
+    background: var(--bg-surface);
+  }
+
+  .progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--gold);
+  }
+
+  /* Checkbox confirmation row (training) */
+  .checkbox-card {
+    @apply flex items-start gap-3 rounded-2xl p-4 text-left transition;
+    border: 1px solid var(--line);
+    background: var(--bg-card);
+  }
+
+  .checkbox-box {
+    @apply mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md;
+    border: 1px solid var(--line);
+    background: var(--bg-surface);
+  }
+
+  .checkbox-box.is-checked {
+    border-color: var(--gold);
+    background: var(--gold);
+    color: var(--gold-ink);
   }
 }

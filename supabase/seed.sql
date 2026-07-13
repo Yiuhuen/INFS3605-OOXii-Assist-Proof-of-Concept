@@ -1,6 +1,7 @@
-insert into public.testers (id, role, experience_level, home_base, preferred_language, instruction_mode, is_new_tester)
-values ('T-102', 'community health worker', 'beginner', 'Vanuatu clinic site', 'bis', 'beginner', true)
+insert into public.testers (id, name, role, experience_level, home_base, preferred_language, instruction_mode, is_new_tester)
+values ('T-102', 'Lina', 'community health worker', 'beginner', 'Site A, Vanuatu', 'bis', 'beginner', true)
 on conflict (id) do update set
+  name = excluded.name,
   role = excluded.role,
   experience_level = excluded.experience_level,
   home_base = excluded.home_base,

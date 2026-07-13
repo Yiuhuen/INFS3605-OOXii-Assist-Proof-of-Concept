@@ -6,15 +6,15 @@ const config: Config = {
     extend: {
       colors: {
         field: {
-          ink: "#17081f",
-          surface: "#251033",
-          card: "#311640",
-          muted: "#8f7da0",
-          line: "#563568",
-          accent: "#7dd3fc",
-          good: "#86efac",
-          warn: "#fde68a",
-          danger: "#fca5a5"
+          ink: "#150c1f",
+          surface: "#1c1226",
+          card: "#201530",
+          muted: "#a898bb",
+          line: "#352842",
+          accent: "#ecc568",
+          good: "#7fe3a0",
+          warn: "#f0b76d",
+          danger: "#f2937f"
         }
       },
       boxShadow: {
