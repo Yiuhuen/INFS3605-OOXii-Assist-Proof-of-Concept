@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, ChevronRight } from "lucide-react";
 import type { ExtractedFields, TestRecord } from "@/lib/types";
 import { filterRecords, qcFilters, qcReasons, type QcFilter } from "@/lib/qc";
 import { EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField } from "@/components/ui";
@@ -27,9 +27,19 @@ export function QcScreen({
   onBack: () => void;
 }) {
   const [filter, setFilter] = useState<QcFilter>("needs_qc");
-  const filtered = filterRecords(records, filter);
+  const filtered = useMemo(() => filterRecords(records, filter), [records, filter]);
   const [selectedId, setSelectedId] = useState(latestRecordId ?? filtered[0]?.id ?? "");
   const selected = filtered.find((record) => record.id === selectedId) ?? filtered[0];
+
+  useEffect(() => {
+    if (filtered.length === 0) {
+      if (selectedId) setSelectedId("");
+      return;
+    }
+    if (!filtered.some((record) => record.id === selectedId)) {
+      setSelectedId(filtered[0].id);
+    }
+  }, [filtered, selectedId]);
 
   useEffect(() => {
     if (selected) loadQcAudio(selected);
@@ -44,7 +54,7 @@ export function QcScreen({
   return (
     <section>
       <ScreenHeader title="QC Review" onBack={onBack} isOnline={isOnline} />
-      <p className="mb-5 text-sm opacity-70">Check records with missing, edited, or low-confidence fields before export.</p>
+      <p className="mb-5 text-sm opacity-70">Review records with missing, edited, low-confidence, or unresolved information before export.</p>
 
       <div className="mb-5 flex flex-wrap gap-2">
         {qcFilters.map((option) => (
@@ -74,13 +84,23 @@ export function QcScreen({
               >
                 <div className="flex items-center justify-between">
                   <span className="font-bold">{record.client_id}</span>
-                  <span className="text-xs opacity-60">{new Date(record.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  <span className="text-xs opacity-60">
+                    {new Date(record.created_at).toLocaleDateString([], { day: "2-digit", month: "short" })} ·{" "}
+                    {new Date(record.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <StatusBadge label={`${Math.round(record.confidence_score * 100)}% confidence`} tone={record.confidence_score < 0.7 ? "warn" : "good"} />
+                  {record.missing_fields.length > 0 && <StatusBadge label={`${record.missing_fields.length} missing`} tone="warn" />}
                   {record.edited_by_user && <StatusBadge label="Edited" tone="warn" />}
+                  {record.recording_status !== "recorded" && <StatusBadge label="Recording issue" tone="warn" />}
                   {record.sync_status === "Pending sync" && <StatusBadge label="Pending sync" tone="warn" />}
+                  {record.sync_status === "Failed" && <StatusBadge label="Sync failed" tone="danger" />}
                   {record.qc_status === "Approved" ? <StatusBadge label="Complete" tone="good" /> : <StatusBadge label="Needs QC" tone="danger" />}
+                </div>
+                <div className="mt-3 flex items-center justify-end gap-1 text-xs font-bold text-[var(--gold)]">
+                  Review record
+                  <ChevronRight className="h-3.5 w-3.5" />
                 </div>
               </button>
             );

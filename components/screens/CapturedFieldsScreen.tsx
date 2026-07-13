@@ -34,6 +34,7 @@ export function CapturedFieldsScreen({
 }) {
   const effective = editedFields ?? extracted;
   const lowConfidence = effective.confidence_score < 0.7 || effective.missing_fields.length > 0;
+  const qcRequired = lowConfidence || Boolean(editedFields);
 
   return (
     <section>
@@ -45,6 +46,7 @@ export function CapturedFieldsScreen({
           Capture confidence: {Math.round(effective.confidence_score * 100)}%
         </span>
         {editedFields && <StatusBadge label="Edited — verify in QC" tone="warn" />}
+        {qcRequired && <StatusBadge label="QC required" tone="danger" />}
       </div>
 
       <div className="space-y-4">

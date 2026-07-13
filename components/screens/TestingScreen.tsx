@@ -107,6 +107,7 @@ export function TestingScreen({
         variant="preview"
         eyebrow="Ask the client"
         prompt={step.client_prompt}
+        icon={step.icon}
         onPlay={() => speakPrompt(step.audio_prompt_text ?? step.client_prompt)}
         speechAvailable={isSpeechAvailable()}
       />

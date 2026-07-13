@@ -169,8 +169,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!authMode) setScreen("login");
-  }, [authMode]);
+    if (!authMode) {
+      setScreen("login");
+      return;
+    }
+    if (screen === "login") {
+      setScreen(tester.preferred_language ? (tester.is_new_tester ? "language" : "dashboard") : "language");
+    }
+  }, [authMode, screen, tester.is_new_tester, tester.preferred_language]);
 
   useEffect(() => {
     if (screen !== "recording") {
@@ -186,6 +192,13 @@ export default function Home() {
   }, [screen, recording, audioBlob, overrideReason]);
 
   const isOnline = connectionMode === "force-online" ? true : connectionMode === "force-offline" ? false : browserOnline;
+
+  useEffect(() => {
+    if (!authMode || !isOnline) return;
+    void syncPendingRecords();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authMode, isOnline]);
+
   const activePack = useMemo(() => {
     const selected = languagePacks.find((pack) => pack.code === tester.preferred_language);
     if (!selected) return getFallbackPack(languagePacks);
@@ -412,6 +425,53 @@ export default function Home() {
     setScreen("fields");
   }
 
+  async function syncPendingRecords() {
+    const pendingRecords = loadRecords().filter((record) => record.sync_status === "Pending sync");
+    if (pendingRecords.length === 0) return;
+
+    if (!isSupabaseConfigured) {
+      setSyncMessage("Demo mode: pending records are saved locally. Add Supabase env vars to enable cloud sync.");
+      return;
+    }
+
+    let syncedCount = 0;
+    let failedCount = 0;
+    let latestRecordUpdate: TestRecord | null = null;
+
+    for (const pendingRecord of pendingRecords) {
+      const updatedAt = new Date().toISOString();
+      const syncedRecord: TestRecord = {
+        ...pendingRecord,
+        sync_status: "Synced",
+        connection_status: "online",
+        updated_at: updatedAt
+      };
+      const syncResult = await syncRecordToSupabase(syncedRecord);
+      const nextRecord: TestRecord = syncResult.ok
+        ? syncedRecord
+        : {
+            ...pendingRecord,
+            sync_status: "Failed",
+            connection_status: "online",
+            updated_at: updatedAt
+          };
+
+      if (syncResult.ok) syncedCount += 1;
+      else failedCount += 1;
+
+      saveRecord(nextRecord);
+      if (latestRecord?.id === pendingRecord.id) latestRecordUpdate = nextRecord;
+    }
+
+    setRecords(loadRecords());
+    if (latestRecordUpdate) setLatestRecord(latestRecordUpdate);
+    if (failedCount > 0) {
+      setSyncMessage(`Sync attempted: ${syncedCount} synced, ${failedCount} failed. Failed records remain available locally.`);
+    } else {
+      setSyncMessage(`Sync complete: ${syncedCount} pending record${syncedCount === 1 ? "" : "s"} synced to Supabase.`);
+    }
+  }
+
   function editExtractedField(key: keyof ExtractedFields, value: string) {
     setEditedFields((prev) => {
       const base = prev ?? extracted;
@@ -444,13 +504,14 @@ export default function Home() {
       audioLocalUrl = `override://no-recording/${id}?at=${encodeURIComponent(now)}`;
     }
 
+    const initialSyncStatus = isOnline ? (isSupabaseConfigured ? "Pending sync" : "Synced") : "Pending sync";
     const record: TestRecord = {
       id,
       client_id: client.id,
       tester_id: tester.id,
       language: activePack.code,
       status: needsQc ? "Needs QC" : "Complete",
-      sync_status: isOnline ? "Synced" : "Pending sync",
+      sync_status: initialSyncStatus,
       connection_status: isOnline ? "online" : "offline",
       audio_local_url: audioLocalUrl,
       recording_status: recordingStatus,
@@ -471,17 +532,38 @@ export default function Home() {
       updated_at: now
     };
 
-    saveRecord(record);
-    setRecords(loadRecords());
-    setLatestRecord(record);
-    setHasDraftClient(false);
+    let savedRecord = record;
+    saveRecord(savedRecord);
 
-    if (isOnline) {
-      const syncResult = await syncRecordToSupabase(record);
-      setSyncMessage(syncResult.ok ? "Synced to Supabase." : "Saved in local demo mode. Add Supabase env vars for cloud sync.");
+    if (isOnline && isSupabaseConfigured) {
+      const syncedRecord: TestRecord = {
+        ...record,
+        sync_status: "Synced",
+        connection_status: "online",
+        updated_at: new Date().toISOString()
+      };
+      const syncResult = await syncRecordToSupabase(syncedRecord);
+      savedRecord = syncResult.ok
+        ? syncedRecord
+        : {
+            ...record,
+            sync_status: "Failed",
+            connection_status: "online",
+            updated_at: new Date().toISOString()
+          };
+      saveRecord(savedRecord);
+      setSyncMessage(
+        syncResult.ok ? "Synced to Supabase." : `Saved locally; Supabase sync failed (${syncResult.reason}).`
+      );
+    } else if (isOnline) {
+      setSyncMessage("Saved in local demo mode. Add Supabase env vars for cloud sync.");
     } else {
       setSyncMessage("Saved locally. This record will remain pending until connection returns.");
     }
+
+    setRecords(loadRecords());
+    setLatestRecord(savedRecord);
+    setHasDraftClient(false);
 
     setScreen("saved");
   }
@@ -569,6 +651,7 @@ export default function Home() {
           records={records}
           activePack={activePack}
           isOnline={isOnline}
+          displaySettings={displaySettings}
           hasDraftClient={hasDraftClient}
           onStartRecording={() =>
             requireTrainingThen(() => {

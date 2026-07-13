@@ -18,13 +18,18 @@ export function SavedScreen({
   onQc: () => void;
   onDashboard: () => void;
 }) {
+  const savedTitle =
+    record.sync_status === "Pending sync" ? "Saved offline" : record.sync_status === "Failed" ? "Saved locally" : "Record saved";
+  const savedDetail =
+    record.sync_status === "Synced" ? "Record is ready for review and export." : "Record is safe on this phone.";
+
   return (
     <section className="mx-auto max-w-md text-center">
       <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--good-bg)] text-[var(--good)]">
         <CheckCircle2 className="h-9 w-9" />
       </div>
-      <h1 className="text-2xl font-black">Saved offline</h1>
-      <p className="mt-2 opacity-70">Record is safe on this phone.</p>
+      <h1 className="text-2xl font-black">{savedTitle}</h1>
+      <p className="mt-2 opacity-70">{savedDetail}</p>
 
       <div className="field-card mt-6 space-y-3 text-left">
         <div className="flex items-center justify-between">

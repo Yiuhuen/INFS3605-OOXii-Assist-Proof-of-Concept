@@ -12,13 +12,14 @@ export function qcStatusLabel(status: QCStatus): string {
   return qcStatusLabels[status] ?? status;
 }
 
-export type QcFilter = "needs_qc" | "edited" | "missing_fields" | "low_confidence" | "pending_sync" | "all";
+export type QcFilter = "needs_qc" | "edited" | "missing_fields" | "low_confidence" | "recording_issues" | "pending_sync" | "all";
 
 export const qcFilters: Array<{ id: QcFilter; label: string }> = [
   { id: "needs_qc", label: "Needs QC" },
   { id: "edited", label: "Edited" },
   { id: "missing_fields", label: "Missing fields" },
   { id: "low_confidence", label: "Low confidence" },
+  { id: "recording_issues", label: "Recording issues" },
   { id: "pending_sync", label: "Pending sync" },
   { id: "all", label: "All records" }
 ];
@@ -36,10 +37,9 @@ export function recordingIncomplete(record: TestRecord) {
 }
 
 export function recordNeedsQc(record: TestRecord) {
-  // A tester/QC "Mark complete" sign-off is a terminal decision: once approved,
-  // the record drops out of the queue even if the underlying confidence/missing
-  // fields are still imperfect, otherwise "Mark complete" would do nothing.
-  if (record.qc_status === "Approved") return false;
+  // QC sign-off is terminal for data-quality issues, but sync problems remain
+  // visible because the demo/export flows need to show pending local records.
+  if (record.qc_status === "Approved" && record.sync_status === "Synced") return false;
   return (
     record.needs_qc ||
     record.requires_qc_verification ||
@@ -48,7 +48,8 @@ export function recordNeedsQc(record: TestRecord) {
     hasMissingFields(record) ||
     recordingIncomplete(record) ||
     record.qc_status === "Unreviewed" ||
-    record.sync_status === "Pending sync"
+    record.sync_status === "Pending sync" ||
+    record.sync_status === "Failed"
   );
 }
 
@@ -60,6 +61,7 @@ export function qcReasons(record: TestRecord): string[] {
   if (hasMissingFields(record)) reasons.push("Missing fields");
   if (record.edited_by_user) reasons.push("Edited by tester");
   if (record.sync_status === "Pending sync") reasons.push("Pending sync");
+  if (record.sync_status === "Failed") reasons.push("Sync failed");
   if (record.qc_status === "Unreviewed") reasons.push("Unreviewed");
   return reasons;
 }
@@ -74,6 +76,8 @@ export function filterRecords(records: TestRecord[], filter: QcFilter): TestReco
       return records.filter(hasMissingFields);
     case "low_confidence":
       return records.filter(isLowConfidence);
+    case "recording_issues":
+      return records.filter(recordingIncomplete);
     case "pending_sync":
       return records.filter((record) => record.sync_status === "Pending sync");
     case "all":

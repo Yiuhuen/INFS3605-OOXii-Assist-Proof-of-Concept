@@ -80,7 +80,7 @@ With these set, the login screen's email/password fields become active and `test
 - Structured test records are saved to `localStorage` immediately on save, regardless of connection.
 - Audio blobs are saved to IndexedDB keyed by record ID, so audio survives a page reload even offline.
 - The "Demo connection mode" selector on the Display settings screen lets you demo offline behaviour without disconnecting your machine.
-- When offline, records are saved with `sync_status: "Pending sync"`. Sync is retried the next time a record is saved while online (there is no background retry queue in this PoC).
+- When offline, records are saved with `sync_status: "Pending sync"`. When the app returns online, pending records are retried if Supabase is configured. In demo-only mode, the record stays local and the app shows a clear message that cloud sync is disabled.
 
 ## Recording is compulsory
 
@@ -106,7 +106,7 @@ Clicking **Next** (the AI extraction step, deliberately not labelled "AI" in the
 
 ## QC review rules
 
-A record needs QC review if any of the following is true: low confidence score, missing required fields, a tester/QC edit was made, the recording failed/was overridden/was never captured, the record is still `Unreviewed`, or it is `Pending sync`. Once a record is marked complete (`qc_status: "Approved"`), it drops out of the Needs QC queue regardless of those underlying flags — that's a deliberate terminal state so "Mark complete" actually does something. The homepage QC Review tile shows a live count and the QC screen has filters for: Needs QC, Edited, Missing fields, Low confidence, Pending sync, All records.
+A record needs QC review if any of the following is true: low confidence score, missing required fields, a tester/QC edit was made, the recording failed/was overridden/was never captured, the record is still `Unreviewed`, or it is `Pending sync` / `Failed` sync. Marking QC complete is terminal for data-quality issues, but sync problems remain visible until resolved. The homepage QC Review tile shows a live count and the QC screen has filters for: Needs QC, Edited, Missing fields, Low confidence, Recording issues, Pending sync, All records.
 
 ## Display settings
 

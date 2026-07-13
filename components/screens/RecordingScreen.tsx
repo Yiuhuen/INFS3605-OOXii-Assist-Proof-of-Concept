@@ -86,9 +86,14 @@ export function RecordingScreen({
         eyebrow="Ask the client — say this aloud"
         prompt={step.client_prompt}
         englishGloss={englishGloss}
+        icon={step.icon}
         onPlay={() => speakPrompt(step.audio_prompt_text ?? step.client_prompt)}
         speechAvailable={isSpeechAvailable()}
       />
+
+      <p className="mt-3 text-sm opacity-80">
+        <span className="font-bold opacity-100">Tester instruction:</span> {step.tester_instruction}
+      </p>
 
       {nudgeVisible && (
         <div className="mt-4">
@@ -146,14 +151,19 @@ export function RecordingScreen({
         <ChevronDown className={`h-4 w-4 transition ${showOverrideInput ? "rotate-180" : ""}`} />
       </button>
       {showOverrideInput && (
-        <TextAreaField
-          label="Reason recording is missing or was skipped"
-          className="mt-3"
-          value={overrideReason}
-          onChange={(event) => setOverrideReason(event.target.value)}
-          placeholder="e.g. Client declined recording; noisy environment; device microphone broken."
-          rows={3}
-        />
+        <>
+          <TextAreaField
+            label="Reason recording is missing or was skipped"
+            className="mt-3"
+            value={overrideReason}
+            onChange={(event) => setOverrideReason(event.target.value)}
+            placeholder="e.g. Client declined recording; noisy environment; device microphone broken."
+            rows={3}
+          />
+          <div className="mt-3">
+            <WarningCard>Manual entries without a recording always require QC review before the record can be exported.</WarningCard>
+          </div>
+        </>
       )}
 
       <PrimaryButton fullWidth className="mt-6" disabled={!canProceed} icon={<ChevronRight className="h-5 w-5" />} onClick={onNext}>

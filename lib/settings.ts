@@ -13,6 +13,18 @@ export const defaultDisplaySettings: DisplaySettings = {
   contrast: "standard"
 };
 
+export const brightnessLabels: Record<Brightness, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High"
+};
+
+export const contrastLabels: Record<ContrastTheme, string> = {
+  standard: "Standard purple",
+  "high-contrast": "High contrast",
+  warm: "Warm low-glare"
+};
+
 export function loadDisplaySettings(): DisplaySettings {
   if (typeof window === "undefined") return defaultDisplaySettings;
   try {

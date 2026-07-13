@@ -1,22 +1,22 @@
 "use client";
 
 import { LogOut } from "lucide-react";
-import type { Brightness, ContrastTheme, DisplaySettings } from "@/lib/settings";
+import { brightnessLabels, contrastLabels, type Brightness, type ContrastTheme, type DisplaySettings } from "@/lib/settings";
 import type { ConnectionMode, Tester } from "@/lib/types";
 import { DangerButton, FormField, PrimaryButton, PromptCard, SecondaryButton, SelectField } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { isSpeechAvailable } from "@/lib/speech";
 
 const brightnessOptions: Array<{ value: Brightness; label: string }> = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" }
+  { value: "low", label: brightnessLabels.low },
+  { value: "medium", label: brightnessLabels.medium },
+  { value: "high", label: brightnessLabels.high }
 ];
 
 const contrastOptions: Array<{ value: ContrastTheme; label: string; detail: string }> = [
-  { value: "standard", label: "Standard purple", detail: "Default dark purple field theme" },
-  { value: "high-contrast", label: "High contrast", detail: "Brighter borders and text for strong sunlight" },
-  { value: "warm", label: "Warm low-glare", detail: "Warm dark tones, softer on the eyes at dusk" }
+  { value: "standard", label: contrastLabels.standard, detail: "Default dark purple field theme" },
+  { value: "high-contrast", label: contrastLabels["high-contrast"], detail: "Brighter borders and text for strong sunlight" },
+  { value: "warm", label: contrastLabels.warm, detail: "Warm dark tones, softer on the eyes at dusk" }
 ];
 
 export function SettingsScreen({

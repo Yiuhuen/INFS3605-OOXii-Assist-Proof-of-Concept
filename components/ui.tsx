@@ -115,6 +115,7 @@ export function PromptCard({
   eyebrow,
   prompt,
   englishGloss,
+  icon,
   onPlay,
   speechAvailable,
   variant = "active"
@@ -122,6 +123,8 @@ export function PromptCard({
   eyebrow: string;
   prompt: string;
   englishGloss?: string;
+  /** Simple emoji shown next to the eyebrow, e.g. a step icon from the prompt data. */
+  icon?: string;
   onPlay: () => void;
   speechAvailable: boolean;
   /** "active" = gold hero card for the recording screen; "preview" = subdued card for the guided-prompt screen. */
@@ -130,7 +133,10 @@ export function PromptCard({
   const isActive = variant === "active";
   return (
     <div className={isActive ? "prompt-card" : "prompt-card-preview"}>
-      <p className={`text-xs font-bold uppercase tracking-wide ${isActive ? "text-[var(--gold)]" : "text-field-muted"}`}>{eyebrow}</p>
+      <div className="flex items-center gap-2">
+        {icon && <span className="text-xl leading-none">{icon}</span>}
+        <p className={`text-xs font-bold uppercase tracking-wide ${isActive ? "text-[var(--gold)]" : "text-field-muted"}`}>{eyebrow}</p>
+      </div>
       <p className="mt-2 text-2xl font-black leading-snug">&ldquo;{prompt}&rdquo;</p>
       {englishGloss && (
         <>
@@ -147,7 +153,9 @@ export function PromptCard({
           Play prompt aloud
         </SecondaryButton>
       )}
-      {!speechAvailable && (
+      {speechAvailable ? (
+        <p className="mt-2 text-sm opacity-60">Use this if you prefer the app to speak the instruction for the client.</p>
+      ) : (
         <p className="mt-2 text-sm opacity-70">Audio playback is not available on this device. Please read the prompt aloud.</p>
       )}
     </div>

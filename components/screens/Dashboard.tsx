@@ -3,6 +3,7 @@
 import { Globe, LogOut, Mic, PenLine, Play, Settings, ShieldCheck, UploadCloud, UserPlus } from "lucide-react";
 import type { LanguagePack, Tester, TestRecord } from "@/lib/types";
 import { recordNeedsQc } from "@/lib/qc";
+import { contrastLabels, type DisplaySettings } from "@/lib/settings";
 import { ActionCard, MetricCard, OfflineBadge, PrimaryButton, StatusBadge } from "@/components/ui";
 
 function greetingForHour(hour: number) {
@@ -20,6 +21,7 @@ export function Dashboard({
   records,
   activePack,
   isOnline,
+  displaySettings,
   hasDraftClient,
   onStartRecording,
   onNewClient,
@@ -35,6 +37,7 @@ export function Dashboard({
   records: TestRecord[];
   activePack: LanguagePack;
   isOnline: boolean;
+  displaySettings: DisplaySettings;
   hasDraftClient: boolean;
   onStartRecording: () => void;
   onNewClient: () => void;
@@ -72,6 +75,7 @@ export function Dashboard({
       <div className="mb-6 flex flex-wrap gap-2">
         <StatusBadge label={activePack.name} tone="language" icon={<Globe className="h-3.5 w-3.5" />} />
         <OfflineBadge isOnline={isOnline} />
+        <StatusBadge label={contrastLabels[displaySettings.contrast]} tone="neutral" icon={<Settings className="h-3.5 w-3.5" />} />
       </div>
 
       <div className="mb-6 grid grid-cols-3 gap-3">
@@ -97,7 +101,9 @@ export function Dashboard({
 
       <div className="field-card">
         <p className="font-bold">QC Review</p>
-        <p className="mt-1 text-sm opacity-70">Check records with missing, edited, or low-confidence fields before export.</p>
+        <p className="mt-1 text-sm opacity-70">
+          Check records with missing, edited, low-confidence, recording issue, or pending sync flags before export.
+        </p>
       </div>
 
       <button className="mt-6 w-full text-center text-sm underline opacity-60 hover:opacity-100" onClick={onTraining}>
