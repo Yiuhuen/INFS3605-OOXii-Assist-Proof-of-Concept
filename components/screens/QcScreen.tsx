@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
 import type { ExtractedFields, TestRecord } from "@/lib/types";
-import { filterRecords, qcFilters, qcReasons, type QcFilter } from "@/lib/qc";
+import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasons, type QcFilter } from "@/lib/qc";
 import { EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
@@ -90,6 +90,7 @@ export function QcScreen({
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
+                  <StatusBadge label={processingStatusLabel(record.processing_status)} tone={processingStatusTone(record.processing_status)} />
                   <StatusBadge label={`${Math.round(record.confidence_score * 100)}% confidence`} tone={record.confidence_score < 0.7 ? "warn" : "good"} />
                   {record.missing_fields.length > 0 && <StatusBadge label={`${record.missing_fields.length} missing`} tone="warn" />}
                   {record.edited_by_user && <StatusBadge label="Edited" tone="warn" />}
@@ -111,15 +112,52 @@ export function QcScreen({
       {selected && effective && (
         <div className="field-card space-y-5">
           <div className="flex flex-wrap gap-2">
+            <StatusBadge label={processingStatusLabel(selected.processing_status)} tone={processingStatusTone(selected.processing_status)} />
             {qcReasons(selected).map((reason) => (
               <StatusBadge key={reason} label={reason} tone="warn" />
             ))}
           </div>
 
-          {qcAudioUrl ? (
-            <audio className="w-full" controls src={qcAudioUrl} />
-          ) : (
-            <p className="text-sm opacity-60">No audio available for this record.</p>
+          <div>
+            <div className="flex items-center justify-between">
+              <p className="field-label mb-0">Audio record</p>
+              <StatusBadge
+                label={`${Math.floor(selected.recording_duration_seconds / 60)
+                  .toString()
+                  .padStart(2, "0")}:${Math.floor(selected.recording_duration_seconds % 60)
+                  .toString()
+                  .padStart(2, "0")}`}
+                tone="neutral"
+              />
+            </div>
+            {qcAudioUrl ? (
+              <audio className="mt-2 w-full" controls src={qcAudioUrl} />
+            ) : (
+              <p className="mt-2 text-sm opacity-60">No audio available for this record.</p>
+            )}
+            {(selected.recording_started_at || selected.recording_stopped_at) && (
+              <p className="mt-2 text-xs opacity-60">
+                {selected.recording_started_at && `Started ${new Date(selected.recording_started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+                {selected.recording_started_at && selected.recording_stopped_at && " · "}
+                {selected.recording_stopped_at && `Stopped ${new Date(selected.recording_stopped_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+              </p>
+            )}
+          </div>
+
+          {selected.unclear_segments.length > 0 && (
+            <div>
+              <p className="field-label">Unclear sections ({selected.unclear_segments.length})</p>
+              <div className="space-y-1.5">
+                {selected.unclear_segments.map((segment) => (
+                  <p key={segment.id} className="text-sm opacity-80">
+                    <span className="mr-2 text-xs font-bold tabular-nums opacity-50">
+                      {new Date(segment.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    </span>
+                    {segment.note}
+                  </p>
+                ))}
+              </div>
+            </div>
           )}
 
           <div>
@@ -129,6 +167,13 @@ export function QcScreen({
             </div>
             <pre className="ink-panel mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-sm opacity-90">{selected.raw_transcript_text}</pre>
           </div>
+
+          {selected.english_processing_transcript && (
+            <div>
+              <p className="field-label">English processing copy</p>
+              <pre className="ink-panel max-h-48 overflow-auto whitespace-pre-wrap text-sm opacity-90">{selected.english_processing_transcript}</pre>
+            </div>
+          )}
 
           {transcriptDiffers && (
             <div>

@@ -1,4 +1,118 @@
-import type { QCStatus, TestRecord } from "./types";
+import type { ProcessingStatus, QCStatus, RecordingStatus, TestRecord } from "./types";
+
+/**
+ * ---------------------------------------------------------------------------
+ * Cost-safe future-AI design note
+ * ---------------------------------------------------------------------------
+ * Nothing in this app calls a paid AI/STT API. All "processing" below is a
+ * local, deterministic mock (see lib/mockAi.ts, lib/liveTranscript.ts) so the
+ * field workflow works fully offline with zero API cost.
+ *
+ * If a real AI pass is added later, it should only ever run:
+ *   1. after the device is back online and the record has synced,
+ *   2. in a batch job, not per-keystroke or per-recording,
+ *   3. only for records this module already flags "needs_qc" (i.e. the local
+ *      mock could not confidently fill required fields),
+ *   4. only on the already-anonymous transcript/field data — no names, DOB,
+ *      phone, address, or GPS ever leave the device, because none is collected,
+ *   5. as a suggestion queued *before* human QC review, never auto-applied, and
+ *   6. export stays blocked or warns (see filterRecords/"needs_qc") until a
+ *      human has approved the record — a real AI pass would feed into that
+ *      same review step, not skip it.
+ * This keeps the offline field workflow authoritative and any future AI spend
+ * opt-in, batched, and reviewable rather than a hard dependency.
+ * ---------------------------------------------------------------------------
+ */
+
+const processingStatusLabels: Record<ProcessingStatus, string> = {
+  not_processed: "Not processed",
+  ready_for_review: "Ready for review",
+  needs_qc: "Needs QC",
+  processed_after_sync: "Processed after sync"
+};
+
+/** Friendlier copy for the raw ProcessingStatus enum. Display-only. */
+export function processingStatusLabel(status: ProcessingStatus): string {
+  return processingStatusLabels[status] ?? status;
+}
+
+const processingStatusTones: Record<ProcessingStatus, "neutral" | "warn" | "good" | "danger"> = {
+  not_processed: "neutral",
+  ready_for_review: "warn",
+  needs_qc: "danger",
+  processed_after_sync: "good"
+};
+
+export function processingStatusTone(status: ProcessingStatus) {
+  return processingStatusTones[status];
+}
+
+/**
+ * Single source of truth for whether a record needs human QC before it can be
+ * treated as clean. Used both for the real save (post-extraction, full signal)
+ * and for lighter pre-save previews (transcript-only signal, before fields
+ * have been extracted yet).
+ */
+export function evaluateNeedsQc({
+  recordingStatus,
+  editedByUser,
+  confidenceScore,
+  missingFieldsCount,
+  transcriptCaptured,
+  manualFallbackUsed,
+  hasUnclearSegments = false
+}: {
+  recordingStatus: RecordingStatus;
+  editedByUser: boolean;
+  confidenceScore: number;
+  missingFieldsCount: number;
+  transcriptCaptured: boolean;
+  manualFallbackUsed: boolean;
+  hasUnclearSegments?: boolean;
+}): boolean {
+  return (
+    recordingStatus !== "recorded" ||
+    editedByUser ||
+    confidenceScore < 0.7 ||
+    missingFieldsCount > 0 ||
+    (recordingStatus === "recorded" && !transcriptCaptured) ||
+    manualFallbackUsed ||
+    hasUnclearSegments
+  );
+}
+
+/**
+ * Derives the local-mock processing lifecycle. Never reflects a paid API —
+ * "processed_after_sync" only means the device has synced, which is the
+ * point a future cost-safe batch AI pass (see design note above) would run.
+ */
+export function computeProcessingStatus({
+  transcriptCaptured,
+  needsQc,
+  qcApproved,
+  synced
+}: {
+  transcriptCaptured: boolean;
+  needsQc: boolean;
+  qcApproved: boolean;
+  synced: boolean;
+}): ProcessingStatus {
+  if (!transcriptCaptured) return "not_processed";
+  if (needsQc && !qcApproved) return "needs_qc";
+  if (synced) return "processed_after_sync";
+  return "ready_for_review";
+}
+
+/** Convenience wrapper for computing processing status directly from a saved TestRecord. */
+export function computeRecordProcessingStatus(record: TestRecord): ProcessingStatus {
+  const transcriptCaptured = Boolean(record.raw_transcript_text.trim()) || record.transcript_segments.some((segment) => segment.isFinal && segment.text.trim());
+  return computeProcessingStatus({
+    transcriptCaptured,
+    needsQc: record.needs_qc,
+    qcApproved: record.qc_status === "Approved",
+    synced: record.sync_status === "Synced"
+  });
+}
 
 const qcStatusLabels: Record<QCStatus, string> = {
   Unreviewed: "Needs review",
@@ -36,6 +150,10 @@ export function recordingIncomplete(record: TestRecord) {
   return record.recording_status !== "recorded";
 }
 
+export function hasUnclearSegments(record: TestRecord) {
+  return record.unclear_segments.length > 0;
+}
+
 export function recordNeedsQc(record: TestRecord) {
   // QC sign-off is terminal for data-quality issues, but sync problems remain
   // visible because the demo/export flows need to show pending local records.
@@ -47,6 +165,7 @@ export function recordNeedsQc(record: TestRecord) {
     isLowConfidence(record) ||
     hasMissingFields(record) ||
     recordingIncomplete(record) ||
+    hasUnclearSegments(record) ||
     record.qc_status === "Unreviewed" ||
     record.sync_status === "Pending sync" ||
     record.sync_status === "Failed"
@@ -60,6 +179,7 @@ export function qcReasons(record: TestRecord): string[] {
   if (isLowConfidence(record)) reasons.push("Low confidence");
   if (hasMissingFields(record)) reasons.push("Missing fields");
   if (record.edited_by_user) reasons.push("Edited by tester");
+  if (hasUnclearSegments(record)) reasons.push(`${record.unclear_segments.length} unclear section${record.unclear_segments.length === 1 ? "" : "s"}`);
   if (record.sync_status === "Pending sync") reasons.push("Pending sync");
   if (record.sync_status === "Failed") reasons.push("Sync failed");
   if (record.qc_status === "Unreviewed") reasons.push("Unreviewed");

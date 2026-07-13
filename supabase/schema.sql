@@ -43,8 +43,16 @@ create table if not exists public.test_records (
   connection_status text not null,
   audio_local_url text,
   recording_status text not null default 'not_recorded' check (recording_status in ('recorded', 'failed', 'not_recorded', 'manual_override')),
+  recording_started_at timestamptz,
+  recording_stopped_at timestamptz,
+  recording_duration_seconds numeric not null default 0,
   manual_override_reason text not null default '',
   raw_transcript_text text,
+  raw_transcript_language text not null default 'en',
+  english_processing_transcript text not null default '',
+  transcript_segments jsonb not null default '[]'::jsonb,
+  prompt_markers jsonb not null default '[]'::jsonb,
+  unclear_segments jsonb not null default '[]'::jsonb,
   corrected_transcript_text text not null default '',
   extracted_json jsonb not null default '{}'::jsonb,
   edited_extracted_json jsonb,
@@ -55,6 +63,7 @@ create table if not exists public.test_records (
   missing_fields text[] not null default '{}',
   qc_status text not null default 'Unreviewed',
   needs_qc boolean not null default true,
+  processing_status text not null default 'not_processed' check (processing_status in ('not_processed', 'ready_for_review', 'needs_qc', 'processed_after_sync')),
   client_snapshot jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -72,6 +81,15 @@ alter table public.test_records add column if not exists extraction_source text 
 alter table public.test_records add column if not exists edited_by_user boolean not null default false;
 alter table public.test_records add column if not exists requires_qc_verification boolean not null default false;
 alter table public.test_records add column if not exists needs_qc boolean not null default true;
+alter table public.test_records add column if not exists raw_transcript_language text not null default 'en';
+alter table public.test_records add column if not exists english_processing_transcript text not null default '';
+alter table public.test_records add column if not exists transcript_segments jsonb not null default '[]'::jsonb;
+alter table public.test_records add column if not exists prompt_markers jsonb not null default '[]'::jsonb;
+alter table public.test_records add column if not exists processing_status text not null default 'not_processed';
+alter table public.test_records add column if not exists recording_started_at timestamptz;
+alter table public.test_records add column if not exists recording_stopped_at timestamptz;
+alter table public.test_records add column if not exists recording_duration_seconds numeric not null default 0;
+alter table public.test_records add column if not exists unclear_segments jsonb not null default '[]'::jsonb;
 
 -- Basic RLS for a classroom PoC. Keep restrictive by default; loosen only for demo environments.
 alter table public.testers enable row level security;

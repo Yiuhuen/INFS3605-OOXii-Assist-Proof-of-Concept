@@ -1,5 +1,18 @@
 import { REQUIRED_EXTRACTED_FIELDS, type ExtractedFields } from "./types";
 
+/**
+ * ---------------------------------------------------------------------------
+ * Local mock processing — no paid API, no network required.
+ * ---------------------------------------------------------------------------
+ * Everything in this file runs synchronously, on-device, with keyword/regex
+ * heuristics. It does NOT call OpenAI, Whisper, Google Speech, or any other
+ * paid service, so a tester can complete an entire test with the phone in
+ * airplane mode. Treat this as a stand-in for a "post-sync processing" step —
+ * see lib/qc.ts for the cost-safe design notes on how a real AI pass could be
+ * introduced later without making it a hard dependency for field testing.
+ * ---------------------------------------------------------------------------
+ */
+
 export const demoTranscript = `Tester: Please cover your left eye and read the smallest line you can see.
 Client: I can read line 6 with the right eye and line 7 with the left eye. I have not had cataract surgery.
 Tester: Do you currently have glasses?
@@ -24,6 +37,13 @@ function extractEyeLines(transcript: string): { right: string; left: string } {
   return result;
 }
 
+/**
+ * The "structured fields" stage of local post-sync processing. Takes the
+ * English processing transcript (see lib/liveTranscript.ts mockTranslateToEnglish)
+ * and heuristically fills ExtractedFields. Runs instantly on-device — this is
+ * intentionally simple/keyword-based rather than a real model, so results
+ * always need a human to confirm via the QC review step before export.
+ */
 export function mockExtractFields(transcript: string): ExtractedFields {
   const lower = transcript.toLowerCase();
   const { right, left } = extractEyeLines(transcript);

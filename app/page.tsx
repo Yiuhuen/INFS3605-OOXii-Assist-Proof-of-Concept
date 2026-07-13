@@ -6,7 +6,6 @@ import { Dashboard } from "@/components/screens/Dashboard";
 import { LanguageScreen } from "@/components/screens/LanguageScreen";
 import { TrainingScreen } from "@/components/screens/TrainingScreen";
 import { ClientScreen } from "@/components/screens/ClientScreen";
-import { TestingScreen } from "@/components/screens/TestingScreen";
 import { RecordingScreen } from "@/components/screens/RecordingScreen";
 import { TranscriptScreen } from "@/components/screens/TranscriptScreen";
 import { CapturedFieldsScreen } from "@/components/screens/CapturedFieldsScreen";
@@ -15,14 +14,21 @@ import { QcScreen } from "@/components/screens/QcScreen";
 import { ExportScreen } from "@/components/screens/ExportScreen";
 import { AdminScreen } from "@/components/screens/AdminScreen";
 import { SettingsScreen } from "@/components/screens/SettingsScreen";
-import { recordsToCsv, downloadCsv } from "@/lib/csv";
+import { recordsToLonglistCsv, recordsToAuditCsv, downloadCsv } from "@/lib/csv";
 import { getFallbackPack } from "@/lib/languagePacks";
-import { generateClientId, generateRecordId } from "@/lib/ids";
+import { generateClientId, generateRecordId, generateSegmentId } from "@/lib/ids";
 import { demoTranscript, mockExtractFields } from "@/lib/mockAi";
+import { computeProcessingStatus, evaluateNeedsQc } from "@/lib/qc";
 import { getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
 import { loadAuthMode, saveAuthMode, type AuthMode } from "@/lib/auth";
 import { applyDisplaySettings, loadDisplaySettings, saveDisplaySettings, type DisplaySettings } from "@/lib/settings";
 import { speakClientPrompt } from "@/lib/speech";
+import {
+  createBrowserRecognitionController,
+  createMockLiveTranscriptController,
+  mockTranslateToEnglish,
+  type LiveTranscriptController
+} from "@/lib/liveTranscript";
 import {
   clearRecords,
   demoTester,
@@ -44,9 +50,14 @@ import {
   type LanguageCode,
   type LanguagePack,
   type ManualExtractedFields,
+  type ProcessingStatus,
+  type PromptMarker,
+  type PromptStep,
   type RecordingStatus,
   type Tester,
-  type TestRecord
+  type TestRecord,
+  type TranscriptSegment,
+  type UnclearSegment
 } from "@/lib/types";
 
 type Screen =
@@ -55,7 +66,6 @@ type Screen =
   | "language"
   | "training"
   | "client"
-  | "testing"
   | "recording"
   | "transcript"
   | "fields"
@@ -107,6 +117,16 @@ export default function Home() {
   const [overrideReason, setOverrideReason] = useState("");
   const [showOverrideInput, setShowOverrideInput] = useState(false);
   const [nudgeVisible, setNudgeVisible] = useState(false);
+  const [recordingStartedAt, setRecordingStartedAt] = useState("");
+  const [recordingStoppedAt, setRecordingStoppedAt] = useState("");
+
+  const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
+  const [interimText, setInterimText] = useState("");
+  const [transcriptUnavailable, setTranscriptUnavailable] = useState(false);
+  const [promptMarkers, setPromptMarkers] = useState<PromptMarker[]>([]);
+  const [unclearSegments, setUnclearSegments] = useState<UnclearSegment[]>([]);
+  const [rawTranscriptLanguage, setRawTranscriptLanguage] = useState<LanguageCode>("en");
+  const [englishProcessingTranscript, setEnglishProcessingTranscript] = useState("");
 
   const [rawTranscript, setRawTranscript] = useState("");
   const [correctedTranscript, setCorrectedTranscript] = useState("");
@@ -124,6 +144,8 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const liveTranscriptRef = useRef<LiveTranscriptController | null>(null);
+  const currentStepIdRef = useRef<string>("");
 
   useEffect(() => {
     setTester(loadTester());
@@ -207,6 +229,10 @@ export default function Home() {
   }, [isOnline, languagePacks, tester.preferred_language]);
   const currentStep = activePack.prompts_json[currentStepIndex] ?? activePack.prompts_json[0];
 
+  useEffect(() => {
+    currentStepIdRef.current = currentStep?.id ?? "";
+  }, [currentStep]);
+
   const englishGloss = useMemo(() => {
     if (!currentStep || activePack.code === "en") return undefined;
     const englishPack = languagePacks.find((pack) => pack.code === "en");
@@ -214,7 +240,51 @@ export default function Home() {
   }, [activePack.code, currentStep, languagePacks]);
 
   const recordingStatus: RecordingStatus = micError ? "failed" : audioBlob ? "recorded" : overrideReason.trim() ? "manual_override" : "not_recorded";
-  const canProceedRecording = recordingStatus === "recorded" || recordingStatus === "manual_override" || (recordingStatus === "failed" && overrideReason.trim().length > 0);
+  const isLastRecordingStep = currentStepIndex === activePack.prompts_json.length - 1;
+  const canProceedRecording = isLastRecordingStep
+    ? recordingStatus === "recorded" || recordingStatus === "manual_override" || (recordingStatus === "failed" && overrideReason.trim().length > 0)
+    : recording ||
+      paused ||
+      recordingStatus === "recorded" ||
+      recordingStatus === "manual_override" ||
+      (recordingStatus === "failed" && overrideReason.trim().length > 0);
+
+  // Pre-save processing-status previews (no TestRecord/sync_status exists yet at this point).
+  const transcriptCapturedPreview = transcriptSegments.some((segment) => segment.isFinal && segment.text.trim());
+  const manualFallbackUsedPreview = recordingStatus !== "recorded" ? Boolean(overrideReason.trim()) : !transcriptCapturedPreview && Boolean(overrideReason.trim());
+  const transcriptNeedsQc = evaluateNeedsQc({
+    recordingStatus,
+    editedByUser: false,
+    confidenceScore: 1,
+    missingFieldsCount: 0,
+    transcriptCaptured: transcriptCapturedPreview,
+    manualFallbackUsed: manualFallbackUsedPreview,
+    hasUnclearSegments: unclearSegments.length > 0
+  });
+  const transcriptProcessingStatus: ProcessingStatus = computeProcessingStatus({
+    transcriptCaptured: transcriptCapturedPreview,
+    needsQc: transcriptNeedsQc,
+    qcApproved: false,
+    synced: false
+  });
+  const fieldsEffective = editedFields ?? extracted;
+  const fieldsNeedsQc = fieldsEffective
+    ? evaluateNeedsQc({
+        recordingStatus,
+        editedByUser: editedFields !== null,
+        confidenceScore: fieldsEffective.confidence_score,
+        missingFieldsCount: fieldsEffective.missing_fields.length,
+        transcriptCaptured: transcriptCapturedPreview,
+        manualFallbackUsed: manualFallbackUsedPreview,
+        hasUnclearSegments: unclearSegments.length > 0
+      })
+    : false;
+  const fieldsProcessingStatus: ProcessingStatus = computeProcessingStatus({
+    transcriptCaptured: transcriptCapturedPreview,
+    needsQc: fieldsNeedsQc,
+    qcApproved: false,
+    synced: false
+  });
 
   function updateTester(next: Tester) {
     setTester(next);
@@ -235,6 +305,7 @@ export default function Home() {
     setPaused(false);
     setElapsedSeconds(0);
     stopElapsedTimer();
+    stopLiveTranscript();
     setAudioBlob(null);
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl("");
@@ -242,6 +313,15 @@ export default function Home() {
     setMicFailureAt("");
     setOverrideReason("");
     setShowOverrideInput(false);
+    setRecordingStartedAt("");
+    setRecordingStoppedAt("");
+    setTranscriptSegments([]);
+    setInterimText("");
+    setTranscriptUnavailable(false);
+    setPromptMarkers([]);
+    setUnclearSegments([]);
+    setRawTranscriptLanguage("en");
+    setEnglishProcessingTranscript("");
     setRawTranscript("");
     setCorrectedTranscript("");
     setExtracted(null);
@@ -324,6 +404,69 @@ export default function Home() {
     }
   }
 
+  function addPromptMarker(step: PromptStep) {
+    setPromptMarkers((prev) => [
+      ...prev,
+      { stepId: step.id, timestamp: new Date().toISOString(), promptText: step.client_prompt, language: activePack.code }
+    ]);
+  }
+
+  function startLiveTranscript() {
+    stopLiveTranscript();
+    const language = activePack.code;
+    setTranscriptUnavailable(false);
+    const handlers = {
+      onInterim: (text: string) => setInterimText(text),
+      onFinal: (text: string, confidence?: number) => {
+        if (!text.trim()) return;
+        setInterimText("");
+        setTranscriptSegments((prev) => [
+          ...prev,
+          {
+            id: generateSegmentId(),
+            timestamp: new Date().toISOString(),
+            language,
+            text: text.trim(),
+            isFinal: true,
+            confidence,
+            stepId: currentStepIdRef.current
+          }
+        ]);
+      }
+    };
+
+    const controller =
+      language === "en"
+        ? createBrowserRecognitionController(handlers)
+        : createMockLiveTranscriptController(language, () => currentStepIdRef.current, handlers);
+
+    if (!controller) {
+      setTranscriptUnavailable(true);
+      return;
+    }
+    liveTranscriptRef.current = controller;
+    controller.start();
+  }
+
+  function stopLiveTranscript() {
+    liveTranscriptRef.current?.stop();
+    liveTranscriptRef.current = null;
+    setInterimText("");
+  }
+
+  function markSectionUnclear() {
+    const lastSegment = transcriptSegments[transcriptSegments.length - 1];
+    setUnclearSegments((prev) => [
+      ...prev,
+      {
+        id: generateSegmentId(),
+        timestamp: new Date().toISOString(),
+        stepId: currentStepIdRef.current,
+        note: lastSegment ? `Near: "${lastSegment.text}"` : "Flagged during recording"
+      }
+    ]);
+  }
+
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -344,7 +487,10 @@ export default function Home() {
       setRecording(true);
       setPaused(false);
       setMicError(false);
+      setRecordingStartedAt((prev) => prev || new Date().toISOString());
       startElapsedTimer();
+      addPromptMarker(currentStep);
+      startLiveTranscript();
     } catch {
       const timestamp = new Date().toISOString();
       setMicFailureAt(timestamp);
@@ -355,6 +501,7 @@ export default function Home() {
       setMicError(true);
       setRecording(false);
       setShowOverrideInput(true);
+      addPromptMarker(currentStep);
     }
   }
 
@@ -362,22 +509,34 @@ export default function Home() {
     mediaRecorderRef.current?.pause();
     setPaused(true);
     stopElapsedTimer();
+    stopLiveTranscript();
   }
 
   function resumeRecording() {
     mediaRecorderRef.current?.resume();
     setPaused(false);
     startElapsedTimer();
+    startLiveTranscript();
   }
 
   function stopRecording() {
     mediaRecorderRef.current?.stop();
     setRecording(false);
     setPaused(false);
+    setRecordingStoppedAt(new Date().toISOString());
     stopElapsedTimer();
+    stopLiveTranscript();
   }
 
-  function buildRawTranscript(): string {
+  function buildRawTranscriptFromSegments(): string {
+    const finalSegments = transcriptSegments.filter((segment) => segment.isFinal && segment.text.trim());
+    if (finalSegments.length > 0) {
+      return finalSegments
+        .slice()
+        .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+        .map((segment) => segment.text)
+        .join("\n");
+    }
     if (recordingStatus === "recorded") return demoTranscript;
     const parts = [`Recording not available (${recordingStatus.replace("_", " ")}).`];
     if (overrideReason.trim()) parts.push(`Tester override reason: ${overrideReason.trim()}`);
@@ -385,25 +544,35 @@ export default function Home() {
     return parts.join(" ");
   }
 
+  function finalizeRecordingSession() {
+    const transcript = buildRawTranscriptFromSegments();
+    const language = activePack.code;
+    const english = mockTranslateToEnglish(transcript, language);
+    setRawTranscript(transcript);
+    setRawTranscriptLanguage(language);
+    setEnglishProcessingTranscript(english);
+    setCorrectedTranscript(english);
+    setExtracted(null);
+    setEditedFields(null);
+    setScreen("transcript");
+  }
+
   function goToNextStep() {
     if (!canProceedRecording) return;
     if (currentStepIndex === activePack.prompts_json.length - 1) {
-      const transcript = buildRawTranscript();
-      setRawTranscript(transcript);
-      setCorrectedTranscript(transcript);
-      setExtracted(null);
-      setEditedFields(null);
-      setScreen("transcript");
+      finalizeRecordingSession();
     } else {
-      setCurrentStepIndex((value) => value + 1);
-      setScreen("testing");
+      const nextIndex = currentStepIndex + 1;
+      const nextStep = activePack.prompts_json[nextIndex];
+      if (recording || paused) addPromptMarker(nextStep);
+      setCurrentStepIndex(nextIndex);
     }
   }
 
   function runExtraction() {
-    const transcriptChanged = correctedTranscript.trim().length > 0 && correctedTranscript.trim() !== rawTranscript.trim();
+    const transcriptChanged = correctedTranscript.trim().length > 0 && correctedTranscript.trim() !== englishProcessingTranscript.trim();
     const source: ExtractionSource = transcriptChanged ? "corrected_transcript" : recordingStatus === "recorded" ? "raw_transcript" : "manual_override";
-    const base = transcriptChanged ? correctedTranscript : rawTranscript;
+    const base = transcriptChanged ? correctedTranscript : englishProcessingTranscript;
     const aiResult = mockExtractFields(base);
     const merged: ExtractedFields = scoreExtractedFields({
       ...aiResult,
@@ -440,10 +609,17 @@ export default function Home() {
 
     for (const pendingRecord of pendingRecords) {
       const updatedAt = new Date().toISOString();
+      const transcriptCaptured = Boolean(pendingRecord.raw_transcript_text.trim()) || pendingRecord.transcript_segments.some((segment) => segment.isFinal && segment.text.trim());
       const syncedRecord: TestRecord = {
         ...pendingRecord,
         sync_status: "Synced",
         connection_status: "online",
+        processing_status: computeProcessingStatus({
+          transcriptCaptured,
+          needsQc: pendingRecord.needs_qc,
+          qcApproved: pendingRecord.qc_status === "Approved",
+          synced: true
+        }),
         updated_at: updatedAt
       };
       const syncResult = await syncRecordToSupabase(syncedRecord);
@@ -486,7 +662,16 @@ export default function Home() {
     const id = generateRecordId();
     const effective = editedFields ?? extracted;
     const editedByUser = editedFields !== null;
-    const needsQc = recordingStatus !== "recorded" || editedByUser || effective.confidence_score < 0.7 || effective.missing_fields.length > 0;
+    const transcriptCaptured = transcriptCapturedPreview;
+    const needsQc = evaluateNeedsQc({
+      recordingStatus,
+      editedByUser,
+      confidenceScore: effective.confidence_score,
+      missingFieldsCount: effective.missing_fields.length,
+      transcriptCaptured,
+      manualFallbackUsed: manualFallbackUsedPreview,
+      hasUnclearSegments: unclearSegments.length > 0
+    });
 
     let audioLocalUrl: string;
     if (recordingStatus === "recorded") {
@@ -515,8 +700,16 @@ export default function Home() {
       connection_status: isOnline ? "online" : "offline",
       audio_local_url: audioLocalUrl,
       recording_status: recordingStatus,
+      recording_started_at: recordingStartedAt,
+      recording_stopped_at: recordingStoppedAt,
+      recording_duration_seconds: elapsedSeconds,
       manual_override_reason: overrideReason,
       raw_transcript_text: rawTranscript,
+      raw_transcript_language: rawTranscriptLanguage,
+      english_processing_transcript: englishProcessingTranscript,
+      transcript_segments: transcriptSegments,
+      prompt_markers: promptMarkers,
+      unclear_segments: unclearSegments,
       corrected_transcript_text: correctedTranscript,
       extracted_json: extracted,
       edited_extracted_json: editedFields,
@@ -527,6 +720,12 @@ export default function Home() {
       missing_fields: effective.missing_fields,
       qc_status: needsQc ? "Unreviewed" : "Approved",
       needs_qc: needsQc,
+      processing_status: computeProcessingStatus({
+        transcriptCaptured,
+        needsQc,
+        qcApproved: !needsQc,
+        synced: initialSyncStatus === "Synced"
+      }),
       client_snapshot: client,
       created_at: now,
       updated_at: now
@@ -540,6 +739,7 @@ export default function Home() {
         ...record,
         sync_status: "Synced",
         connection_status: "online",
+        processing_status: computeProcessingStatus({ transcriptCaptured, needsQc, qcApproved: !needsQc, synced: true }),
         updated_at: new Date().toISOString()
       };
       const syncResult = await syncRecordToSupabase(syncedRecord);
@@ -571,6 +771,7 @@ export default function Home() {
   function updateQcRecord(record: TestRecord, patch: Partial<ExtractedFields>) {
     const base = record.edited_extracted_json ?? record.extracted_json;
     const nextExtracted = scoreExtractedFields({ ...base, ...patch });
+    const transcriptCaptured = Boolean(record.raw_transcript_text.trim()) || record.transcript_segments.some((segment) => segment.isFinal && segment.text.trim());
     const nextRecord: TestRecord = {
       ...record,
       edited_extracted_json: nextExtracted,
@@ -580,6 +781,7 @@ export default function Home() {
       missing_fields: nextExtracted.missing_fields,
       qc_status: "Corrected",
       needs_qc: true,
+      processing_status: computeProcessingStatus({ transcriptCaptured, needsQc: true, qcApproved: false, synced: record.sync_status === "Synced" }),
       updated_at: new Date().toISOString()
     };
     saveRecord(nextRecord);
@@ -588,11 +790,13 @@ export default function Home() {
   }
 
   function markQcComplete(record: TestRecord) {
+    const transcriptCaptured = Boolean(record.raw_transcript_text.trim()) || record.transcript_segments.some((segment) => segment.isFinal && segment.text.trim());
     const nextRecord: TestRecord = {
       ...record,
       qc_status: "Approved",
       needs_qc: false,
       requires_qc_verification: false,
+      processing_status: computeProcessingStatus({ transcriptCaptured, needsQc: false, qcApproved: true, synced: record.sync_status === "Synced" }),
       updated_at: new Date().toISOString()
     };
     saveRecord(nextRecord);
@@ -611,9 +815,14 @@ export default function Home() {
     }
   }
 
-  function handleExport() {
-    const csv = recordsToCsv(records);
+  function handleExportLonglist() {
+    const csv = recordsToLonglistCsv(records);
     downloadCsv(`ooxii-assist-longlist-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  }
+
+  function handleExportAudit() {
+    const csv = recordsToAuditCsv(records);
+    downloadCsv(`ooxii-assist-audit-longlist-${new Date().toISOString().slice(0, 10)}.csv`, csv);
   }
 
   function handleDisplaySettingsChange(next: DisplaySettings) {
@@ -655,7 +864,7 @@ export default function Home() {
           hasDraftClient={hasDraftClient}
           onStartRecording={() =>
             requireTrainingThen(() => {
-              if (hasDraftClient) setScreen("testing");
+              if (hasDraftClient) setScreen("recording");
               else {
                 resetTest();
                 setScreen("client");
@@ -708,31 +917,8 @@ export default function Home() {
           onContinue={() => {
             setHasDraftClient(true);
             setCurrentStepIndex(0);
-            setScreen("testing");
+            setScreen("recording");
           }}
-        />
-      )}
-
-      {isAuthenticated && screen === "testing" && currentStep && (
-        <TestingScreen
-          key={currentStep.id}
-          clientId={client.id}
-          step={currentStep}
-          stepIndex={currentStepIndex}
-          totalSteps={activePack.prompts_json.length}
-          languageName={activePack.name}
-          manualFields={manualFields}
-          setManualFields={setManualFields}
-          isOnline={isOnline}
-          speakPrompt={speakPrompt}
-          onBack={() => {
-            if (currentStepIndex === 0) setScreen("client");
-            else {
-              setCurrentStepIndex((value) => value - 1);
-              setScreen("recording");
-            }
-          }}
-          onContinue={() => setScreen("recording")}
         />
       )}
 
@@ -742,8 +928,11 @@ export default function Home() {
           step={currentStep}
           stepIndex={currentStepIndex}
           totalSteps={activePack.prompts_json.length}
+          upcomingSteps={activePack.prompts_json.slice(currentStepIndex + 1)}
           languageName={activePack.name}
           englishGloss={englishGloss}
+          manualFields={manualFields}
+          setManualFields={setManualFields}
           recording={recording}
           paused={paused}
           elapsedSeconds={elapsedSeconds}
@@ -757,12 +946,17 @@ export default function Home() {
           isOnline={isOnline}
           nudgeVisible={nudgeVisible}
           canProceed={canProceedRecording}
+          transcriptSegments={transcriptSegments}
+          interimText={interimText}
+          transcriptUnavailable={transcriptUnavailable}
+          unclearSegments={unclearSegments}
+          onMarkUnclear={markSectionUnclear}
           speakPrompt={speakPrompt}
           startRecording={startRecording}
           pauseRecording={pauseRecording}
           resumeRecording={resumeRecording}
           stopRecording={stopRecording}
-          onBack={() => setScreen("testing")}
+          onBack={currentStepIndex === 0 ? () => setScreen("client") : undefined}
           onNext={goToNextStep}
         />
       )}
@@ -771,8 +965,17 @@ export default function Home() {
         <TranscriptScreen
           clientId={client.id}
           rawTranscript={rawTranscript}
+          rawTranscriptLanguageName={languagePacks.find((pack) => pack.code === rawTranscriptLanguage)?.name ?? rawTranscriptLanguage}
+          englishProcessingTranscript={englishProcessingTranscript}
           correctedTranscript={correctedTranscript}
           setCorrectedTranscript={setCorrectedTranscript}
+          processingStatus={transcriptProcessingStatus}
+          needsQc={transcriptNeedsQc}
+          manualOverrideReason={overrideReason}
+          audioUrl={audioUrl}
+          recordingDurationSeconds={elapsedSeconds}
+          unclearSegments={unclearSegments}
+          promptMarkers={promptMarkers}
           isOnline={isOnline}
           onNext={goToCapturedFields}
           onBack={() => setScreen("recording")}
@@ -784,6 +987,7 @@ export default function Home() {
           clientId={client.id}
           extracted={extracted}
           editedFields={editedFields}
+          processingStatus={fieldsProcessingStatus}
           isOnline={isOnline}
           onEditField={editExtractedField}
           onBackToTranscript={() => setScreen("transcript")}
@@ -821,7 +1025,8 @@ export default function Home() {
         <ExportScreen
           records={records}
           isOnline={isOnline}
-          onExport={handleExport}
+          onExportLonglist={handleExportLonglist}
+          onExportAudit={handleExportAudit}
           onClear={() => {
             clearRecords();
             setRecords([]);

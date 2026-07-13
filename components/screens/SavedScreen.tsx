@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, ChevronLeft, Clock, Plus } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
-import { qcStatusLabel } from "@/lib/qc";
+import { processingStatusLabel, processingStatusTone, qcStatusLabel } from "@/lib/qc";
 import { PrimaryButton, SecondaryButton, StatusBadge } from "@/components/ui";
 
 export function SavedScreen({
@@ -56,6 +56,10 @@ export function SavedScreen({
             tone={record.qc_status === "Approved" ? "good" : "warn"}
             icon={<AlertTriangle className="h-3.5 w-3.5" />}
           />
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm opacity-70">Processing status</span>
+          <StatusBadge label={processingStatusLabel(record.processing_status)} tone={processingStatusTone(record.processing_status)} />
         </div>
       </div>
 

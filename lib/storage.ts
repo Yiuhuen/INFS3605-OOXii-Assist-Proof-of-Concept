@@ -1,5 +1,6 @@
 import type { LanguagePack, Tester, TestRecord } from "./types";
 import { defaultLanguagePacks } from "./languagePacks";
+import { computeRecordProcessingStatus } from "./qc";
 
 const TESTER_KEY = "ooxii_assist_tester";
 const RECORDS_KEY = "ooxii_assist_records";
@@ -40,7 +41,7 @@ type LegacyTestRecord = Partial<TestRecord> & { transcript_text?: string };
 
 /** Fills defaults for records saved by an earlier PoC build so old local data does not crash new screens. */
 function normalizeRecord(record: LegacyTestRecord): TestRecord {
-  return {
+  const base: Omit<TestRecord, "processing_status"> = {
     id: record.id ?? "",
     client_id: record.client_id ?? "",
     tester_id: record.tester_id ?? "",
@@ -50,8 +51,16 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     connection_status: record.connection_status ?? "offline",
     audio_local_url: record.audio_local_url ?? "",
     recording_status: record.recording_status ?? "recorded",
+    recording_started_at: record.recording_started_at ?? "",
+    recording_stopped_at: record.recording_stopped_at ?? "",
+    recording_duration_seconds: record.recording_duration_seconds ?? 0,
     manual_override_reason: record.manual_override_reason ?? "",
     raw_transcript_text: record.raw_transcript_text ?? record.transcript_text ?? "",
+    raw_transcript_language: record.raw_transcript_language ?? record.language ?? "en",
+    english_processing_transcript: record.english_processing_transcript ?? "",
+    transcript_segments: record.transcript_segments ?? [],
+    prompt_markers: record.prompt_markers ?? [],
+    unclear_segments: record.unclear_segments ?? [],
     corrected_transcript_text: record.corrected_transcript_text ?? "",
     extracted_json: record.extracted_json ?? { comfort_response: "", cataract_history_confirmed: "", right_eye_distance_result: "", left_eye_distance_result: "", final_readable_line: "", glasses_selected: "", additional_notes: "", missing_fields: [], confidence_score: 0 },
     edited_extracted_json: record.edited_extracted_json ?? null,
@@ -74,6 +83,10 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     },
     created_at: record.created_at ?? new Date().toISOString(),
     updated_at: record.updated_at ?? new Date().toISOString()
+  };
+  return {
+    ...base,
+    processing_status: record.processing_status ?? computeRecordProcessingStatus(base as TestRecord)
   };
 }
 

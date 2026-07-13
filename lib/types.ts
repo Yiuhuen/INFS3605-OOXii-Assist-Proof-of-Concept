@@ -6,6 +6,18 @@ export type ExtractionSource = "raw_transcript" | "corrected_transcript" | "manu
 export type RecordingStatus = "recorded" | "failed" | "not_recorded" | "manual_override";
 export type ConnectionMode = "browser" | "force-online" | "force-offline";
 
+/**
+ * Lifecycle of the local, offline-capable mock processing (translation + field
+ * extraction) for a record — never a paid API call. See lib/qc.ts for how this
+ * is derived and lib/mockAi.ts for the cost-safe future-AI design notes.
+ *  - not_processed: no transcript content exists yet to work from.
+ *  - ready_for_review: local mock processing produced usable fields, nothing flagged.
+ *  - needs_qc: local mock flagged low confidence, missing fields, or a manual fallback.
+ *  - processed_after_sync: record has synced; this is the point a future cost-safe
+ *    batch AI pass (still optional, still not required to complete a test) would run.
+ */
+export type ProcessingStatus = "not_processed" | "ready_for_review" | "needs_qc" | "processed_after_sync";
+
 export interface Tester {
   id: string;
   name: string;
@@ -86,9 +98,25 @@ export interface TestRecord {
   connection_status: "online" | "offline";
   audio_local_url: string;
   recording_status: RecordingStatus;
+  /** ISO timestamp when the continuous recording actually started (first successful Start). Empty if never recorded. */
+  recording_started_at: string;
+  /** ISO timestamp when the continuous recording was stopped. Empty if never stopped. */
+  recording_stopped_at: string;
+  /** Total recorded duration in seconds, across the whole continuous session (excludes paused time). */
+  recording_duration_seconds: number;
   manual_override_reason: string;
   /** Immutable transcript as produced from audio/mock STT. Never edited after creation. */
   raw_transcript_text: string;
+  /** Language the raw transcript was captured/downloaded in. */
+  raw_transcript_language: LanguageCode;
+  /** Mock-translated English version of the raw transcript, used for structured field extraction. */
+  english_processing_transcript: string;
+  /** Timestamped live-transcript segments captured during the continuous recording. */
+  transcript_segments: TranscriptSegment[];
+  /** Markers recorded each time the tester moved to a new prompt during the recording. */
+  prompt_markers: PromptMarker[];
+  /** Moments the tester flagged as unclear during recording — always require QC review. */
+  unclear_segments: UnclearSegment[];
   /** Optional tester/QC edited transcript. Raw transcript is preserved separately. */
   corrected_transcript_text: string;
   /** Structured fields generated from the transcript. Not mutated by QC edits. */
@@ -102,9 +130,37 @@ export interface TestRecord {
   missing_fields: string[];
   qc_status: QCStatus;
   needs_qc: boolean;
+  /** Local-mock processing lifecycle for this record. Never set by a paid API. */
+  processing_status: ProcessingStatus;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;
+}
+
+export interface TranscriptSegment {
+  id: string;
+  timestamp: string;
+  language: LanguageCode;
+  text: string;
+  isFinal: boolean;
+  /** Recognition engine confidence (0-1), when the engine reports one. Browser SpeechRecognition provides this for English; the Tok Pisin/Bislama mock generator does not. */
+  confidence?: number;
+  stepId: string;
+}
+
+export interface PromptMarker {
+  stepId: string;
+  timestamp: string;
+  promptText: string;
+  language: LanguageCode;
+}
+
+/** A tester-flagged moment where the live transcript assist (or audio) was unclear — always requires QC review. */
+export interface UnclearSegment {
+  id: string;
+  timestamp: string;
+  stepId: string;
+  note: string;
 }
 
 export interface PromptStep {

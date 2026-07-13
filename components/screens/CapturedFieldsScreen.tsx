@@ -1,7 +1,8 @@
 "use client";
 
 import { Save, Zap } from "lucide-react";
-import type { ExtractedFields } from "@/lib/types";
+import type { ExtractedFields, ProcessingStatus } from "@/lib/types";
+import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
 import { FormField, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
@@ -19,6 +20,7 @@ export function CapturedFieldsScreen({
   clientId,
   extracted,
   editedFields,
+  processingStatus,
   isOnline,
   onEditField,
   onBackToTranscript,
@@ -27,6 +29,7 @@ export function CapturedFieldsScreen({
   clientId: string;
   extracted: ExtractedFields;
   editedFields: ExtractedFields | null;
+  processingStatus: ProcessingStatus;
   isOnline: boolean;
   onEditField: (key: keyof ExtractedFields, value: string) => void;
   onBackToTranscript: () => void;
@@ -41,12 +44,13 @@ export function CapturedFieldsScreen({
       <ScreenHeader title="Review captured fields" subtitle={clientId} onBack={onBackToTranscript} isOnline={isOnline} />
 
       <div className="mb-5 flex flex-wrap items-center gap-2">
+        <StatusBadge label={processingStatusLabel(processingStatus)} tone={processingStatusTone(processingStatus)} />
         <span className={`status-pill normal-case tracking-normal ${lowConfidence ? "badge-warn" : "badge-good"}`}>
           <Zap className="h-3.5 w-3.5" />
           Capture confidence: {Math.round(effective.confidence_score * 100)}%
         </span>
         {editedFields && <StatusBadge label="Edited — verify in QC" tone="warn" />}
-        {qcRequired && <StatusBadge label="QC required" tone="danger" />}
+        {qcRequired && <StatusBadge label="Needs QC" tone="danger" />}
       </div>
 
       <div className="space-y-4">
