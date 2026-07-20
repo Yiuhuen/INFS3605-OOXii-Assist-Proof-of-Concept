@@ -25,7 +25,6 @@ import { getNextAction, type WorkflowState } from "@/lib/workflow";
 import { getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
 import { loadAuthMode, saveAuthMode, type AuthMode } from "@/lib/auth";
 import { applyDisplaySettings, loadDisplaySettings, saveDisplaySettings, type DisplaySettings } from "@/lib/settings";
-import { speakClientPrompt } from "@/lib/speech";
 import {
   createBrowserRecognitionController,
   getSpeechRecognitionConstructor,
@@ -35,6 +34,8 @@ import {
   type TranscriptEngineStatus
 } from "@/lib/liveTranscript";
 import type { InsightTargetPage } from "@/lib/insights";
+import { analyseTranscriptQuality, applySuggestedCorrection, buildFieldConfidence, deriveExtractionSafetyStatus } from "@/lib/transcriptQuality";
+import { analyseTranslationSafety } from "@/lib/translationSafety";
 import {
   clearRecords,
   demoTester,
@@ -52,6 +53,7 @@ import {
   UNKNOWN_FIELD_VALUE,
   type ClientRecord,
   type ConnectionMode,
+  type CorrectionHistoryEntry,
   type ExtractedFields,
   type ExtractionSource,
   type LanguageCode,
@@ -61,8 +63,11 @@ import {
   type PromptMarker,
   type PromptStep,
   type RecordingStatus,
+  type SuggestedCorrection,
   type Tester,
   type TestRecord,
+  type TranscriptQualityFlag,
+  type TranscriptReviewStatus,
   type TranscriptSegment,
   type UnclearSegment
 } from "@/lib/types";
@@ -166,6 +171,13 @@ export default function Home() {
 
   const [rawTranscript, setRawTranscript] = useState("");
   const [correctedTranscript, setCorrectedTranscript] = useState("");
+  /** Suggest-only corrections the tester has actually applied to correctedTranscript this session — see lib/transcriptQuality.ts applySuggestedCorrection. Never touches rawTranscript. */
+  const [appliedCorrections, setAppliedCorrections] = useState<CorrectionHistoryEntry[]>([]);
+  /** Flag ids the tester dismissed via "Ignore" on the Transcript Review screen — tracked for review-status display only; ignoring never clears requiresQc, since only a human QC reviewer can do that. */
+  const [ignoredFlagIds, setIgnoredFlagIds] = useState<string[]>([]);
+  const [transcriptReviewTouched, setTranscriptReviewTouched] = useState(false);
+  /** True once the tester has moved on to Captured Fields while the transcript still needed QC — drives the "Sent to QC" review-status label if they navigate back. */
+  const [transcriptSentToQc, setTranscriptSentToQc] = useState(false);
   const [extracted, setExtracted] = useState<ExtractedFields | null>(null);
   const [editedFields, setEditedFields] = useState<ExtractedFields | null>(null);
   const [extractionSource, setExtractionSource] = useState<ExtractionSource>("raw_transcript");
@@ -340,6 +352,37 @@ export default function Home() {
     [activePack, visitedStepIds]
   );
   const hasUnvisitedPromptsPreview = missingPromptSteps.length > 0;
+
+  // Transcript quality / translation safety — recomputed live as the tester
+  // edits, since these are draft-review signals, never a one-time judgement.
+  // See lib/transcriptQuality.ts / lib/translationSafety.ts for the rules.
+  const transcriptQualityReport = useMemo(
+    () =>
+      analyseTranscriptQuality({
+        rawText: correctedTranscript || englishProcessingTranscript || rawTranscript,
+        segments: transcriptSegments,
+        language: activePack.code
+      }),
+    [correctedTranscript, englishProcessingTranscript, rawTranscript, transcriptSegments, activePack.code]
+  );
+  const translationSafetyReport = useMemo(
+    () => analyseTranslationSafety({ language: activePack.code, rawText: rawTranscript, englishProcessingText: englishProcessingTranscript }),
+    [activePack.code, rawTranscript, englishProcessingTranscript]
+  );
+  const resolvedTranscriptFlagIds = useMemo(
+    () =>
+      transcriptQualityReport.flags
+        .filter((flag) => appliedCorrections.some((correction) => correction.originalText === flag.originalText && correction.suggestedText === flag.suggestedText))
+        .map((flag) => flag.id),
+    [transcriptQualityReport.flags, appliedCorrections]
+  );
+  const unresolvedTranscriptFlagIds = useMemo(
+    () => transcriptQualityReport.flags.filter((flag) => !resolvedTranscriptFlagIds.includes(flag.id)).map((flag) => flag.id),
+    [transcriptQualityReport.flags, resolvedTranscriptFlagIds]
+  );
+  const hasClinicalCorrectionPreview = appliedCorrections.some((correction) => correction.affectsClinicalMeaning);
+  const extractionSafetyStatusPreview = deriveExtractionSafetyStatus(transcriptQualityReport, translationSafetyReport);
+
   const transcriptNeedsQc = evaluateNeedsQc({
     recordingStatus,
     editedByUser: false,
@@ -348,7 +391,11 @@ export default function Home() {
     transcriptCaptured: transcriptCapturedPreview,
     manualFallbackUsed: manualFallbackUsedPreview,
     hasUnclearSegments: unclearSegments.length > 0,
-    hasUnvisitedPrompts: hasUnvisitedPromptsPreview
+    hasUnvisitedPrompts: hasUnvisitedPromptsPreview,
+    transcriptQualityRisk: transcriptQualityReport.overallRisk,
+    hasClinicalCorrection: hasClinicalCorrectionPreview,
+    translationReviewRequired: translationSafetyReport.requiresQc,
+    extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required"
   });
   const transcriptProcessingStatus: ProcessingStatus = computeProcessingStatus({
     transcriptCaptured: transcriptCapturedPreview,
@@ -356,6 +403,13 @@ export default function Home() {
     qcApproved: false,
     synced: false
   });
+  const transcriptReviewStatus: TranscriptReviewStatus = transcriptSentToQc
+    ? "sent_to_qc"
+    : correctedTranscript.trim() !== englishProcessingTranscript.trim()
+      ? "reviewed_with_corrections"
+      : transcriptReviewTouched
+        ? "reviewed_no_changes"
+        : "not_reviewed";
   const fieldsEffective = editedFields ?? extracted;
   const fieldsNeedsQc = fieldsEffective
     ? evaluateNeedsQc({
@@ -366,7 +420,11 @@ export default function Home() {
         transcriptCaptured: transcriptCapturedPreview,
         manualFallbackUsed: manualFallbackUsedPreview,
         hasUnclearSegments: unclearSegments.length > 0,
-        hasUnvisitedPrompts: hasUnvisitedPromptsPreview
+        hasUnvisitedPrompts: hasUnvisitedPromptsPreview,
+        transcriptQualityRisk: transcriptQualityReport.overallRisk,
+        hasClinicalCorrection: hasClinicalCorrectionPreview,
+        translationReviewRequired: translationSafetyReport.requiresQc,
+        extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required"
       })
     : false;
   const fieldsProcessingStatus: ProcessingStatus = computeProcessingStatus({
@@ -439,6 +497,10 @@ export default function Home() {
     setEnglishProcessingTranscript("");
     setRawTranscript("");
     setCorrectedTranscript("");
+    setAppliedCorrections([]);
+    setIgnoredFlagIds([]);
+    setTranscriptReviewTouched(false);
+    setTranscriptSentToQc(false);
     setExtracted(null);
     setEditedFields(null);
     setExtractionSource("raw_transcript");
@@ -502,10 +564,6 @@ export default function Home() {
   function completeTraining() {
     updateTester({ ...tester, is_new_tester: false });
     setScreen("dashboard");
-  }
-
-  function speakPrompt(text: string) {
-    speakClientPrompt(text);
   }
 
   function startElapsedTimer() {
@@ -795,6 +853,10 @@ export default function Home() {
     setRawTranscriptLanguage(language);
     setEnglishProcessingTranscript(english);
     setCorrectedTranscript(english);
+    setAppliedCorrections([]);
+    setIgnoredFlagIds([]);
+    setTranscriptReviewTouched(false);
+    setTranscriptSentToQc(false);
     setExtracted(null);
     setEditedFields(null);
     setScreen("transcript");
@@ -813,6 +875,49 @@ export default function Home() {
     setRawTranscript(transcript);
     setEnglishProcessingTranscript(english);
     setCorrectedTranscript(english);
+  }
+
+  /** Corrected-transcript textarea edits — tracked so the review-status badge can distinguish "not reviewed" from "reviewed, no changes". */
+  function updateCorrectedTranscript(value: string) {
+    setCorrectedTranscript(value);
+    setTranscriptReviewTouched(true);
+  }
+
+  /**
+   * Applies a suggest-only correction (spec: applyMode "suggest_only") to
+   * correctedTranscript ONLY — rawTranscript is never mutated. Records the
+   * correction in appliedCorrections so it can be frozen into the saved
+   * record's corrections_applied audit trail.
+   */
+  function applyCorrection(correction: SuggestedCorrection) {
+    const { updatedText, historyEntry } = applySuggestedCorrection({
+      correctedText: correctedTranscript,
+      correction,
+      testerId: tester.id
+    });
+    setCorrectedTranscript(updatedText);
+    setAppliedCorrections((prev) => [...prev, historyEntry]);
+    setTranscriptReviewTouched(true);
+  }
+
+  /** Tester dismissed a quality flag without applying its suggestion — tracked for the review UI only; never clears requiresQc, which only a QC reviewer can resolve. */
+  function ignoreFlag(flagId: string) {
+    setIgnoredFlagIds((prev) => (prev.includes(flagId) ? prev : [...prev, flagId]));
+    setTranscriptReviewTouched(true);
+  }
+
+  /** Reuses the existing unclear-segment mechanism so a flagged section shows up alongside recording-time unclear marks during QC. */
+  function markFlagUnclear(flag: TranscriptQualityFlag) {
+    setUnclearSegments((prev) => [
+      ...prev,
+      {
+        id: generateSegmentId(),
+        timestamp: new Date().toISOString(),
+        stepId: flag.stepId || currentStepIdRef.current,
+        note: `Flagged from transcript review: "${flag.originalText}" — ${flag.reason}`
+      }
+    ]);
+    setTranscriptReviewTouched(true);
   }
 
   /**
@@ -856,6 +961,15 @@ export default function Home() {
       current_glasses: aiResult.current_glasses || manualFields.current_glasses,
       additional_notes: aiResult.additional_notes || manualFields.additional_notes
     });
+
+    // Structured extraction never runs blind to transcript/translation risk —
+    // per-field draft-quality metadata rides alongside the values themselves
+    // (spec §7) so an uncertain field is labelled, never trusted silently.
+    const { missing_fields: _missingFields, confidence_score: _confidenceScore, field_confidence: _existingFieldConfidence, ...manualShape } = merged;
+    const fieldConfidenceSource: "manual" | "transcript" | "corrected_transcript" =
+      source === "manual_override" ? "manual" : source === "corrected_transcript" ? "corrected_transcript" : "transcript";
+    merged.field_confidence = buildFieldConfidence(manualShape, transcriptQualityReport, translationSafetyReport, fieldConfidenceSource);
+
     setExtracted(merged);
     setEditedFields(null);
     setExtractionSource(source);
@@ -863,6 +977,7 @@ export default function Home() {
 
   function goToCapturedFields() {
     runExtraction();
+    if (transcriptNeedsQc) setTranscriptSentToQc(true);
     setScreen("fields");
   }
 
@@ -945,7 +1060,11 @@ export default function Home() {
       transcriptCaptured,
       manualFallbackUsed: manualFallbackUsedPreview,
       hasUnclearSegments: unclearSegments.length > 0,
-      hasUnvisitedPrompts: hasUnvisitedPromptsPreview
+      hasUnvisitedPrompts: hasUnvisitedPromptsPreview,
+      transcriptQualityRisk: transcriptQualityReport.overallRisk,
+      hasClinicalCorrection: hasClinicalCorrectionPreview,
+      translationReviewRequired: translationSafetyReport.requiresQc,
+      extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required"
     });
 
     let audioLocalUrl: string;
@@ -1006,6 +1125,13 @@ export default function Home() {
         synced: initialSyncStatus === "Synced"
       }),
       sync_attempts: 0,
+      transcript_quality_risk: transcriptQualityReport.overallRisk,
+      transcript_quality_flags: transcriptQualityReport.flags,
+      suggested_corrections: transcriptQualityReport.suggestedCorrections,
+      corrections_applied: appliedCorrections,
+      unresolved_transcript_flag_ids: unresolvedTranscriptFlagIds,
+      translation_review_required: translationSafetyReport.requiresQc,
+      extraction_safety_status: extractionSafetyStatusPreview,
       client_snapshot: client,
       created_at: now,
       updated_at: now
@@ -1245,6 +1371,8 @@ export default function Home() {
           totalSteps={activePack.prompts_json.length}
           upcomingSteps={activePack.prompts_json.slice(currentStepIndex + 1)}
           languageName={activePack.name}
+          languageCode={activePack.code}
+          speechSpeed={displaySettings.speechSpeed}
           englishGloss={englishGloss}
           manualFields={manualFields}
           setManualFields={setManualFields}
@@ -1276,7 +1404,6 @@ export default function Home() {
           onStopSttOnlyTest={stopSttOnlyTest}
           unclearSegments={unclearSegments}
           onMarkUnclear={markSectionUnclear}
-          speakPrompt={speakPrompt}
           startRecording={startRecording}
           pauseRecording={pauseRecording}
           resumeRecording={resumeRecording}
@@ -1295,7 +1422,7 @@ export default function Home() {
           rawTranscriptLanguageName={languagePacks.find((pack) => pack.code === rawTranscriptLanguage)?.name ?? rawTranscriptLanguage}
           englishProcessingTranscript={englishProcessingTranscript}
           correctedTranscript={correctedTranscript}
-          setCorrectedTranscript={setCorrectedTranscript}
+          setCorrectedTranscript={updateCorrectedTranscript}
           processingStatus={transcriptProcessingStatus}
           needsQc={transcriptNeedsQc}
           manualOverrideReason={overrideReason}
@@ -1309,6 +1436,14 @@ export default function Home() {
           onGenerateDraft={regenerateTranscriptDraft}
           onNext={goToCapturedFields}
           onBack={() => setScreen("recording")}
+          qualityReport={transcriptQualityReport}
+          translationReport={translationSafetyReport}
+          appliedCorrections={appliedCorrections}
+          ignoredFlagIds={ignoredFlagIds}
+          reviewStatus={transcriptReviewStatus}
+          onApplyCorrection={applyCorrection}
+          onIgnoreFlag={ignoreFlag}
+          onMarkFlagUnclear={markFlagUnclear}
         />
       )}
 
@@ -1322,6 +1457,7 @@ export default function Home() {
           onEditField={editExtractedField}
           onBackToTranscript={() => setScreen("transcript")}
           onSave={saveCurrentRecord}
+          extractionSafetyStatus={extractionSafetyStatusPreview}
         />
       )}
 

@@ -78,6 +78,13 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     needs_qc: record.needs_qc ?? record.qc_status !== "Approved",
     qc_notes: record.qc_notes ?? "",
     sync_attempts: record.sync_attempts ?? 0,
+    transcript_quality_risk: record.transcript_quality_risk ?? "low",
+    transcript_quality_flags: record.transcript_quality_flags ?? [],
+    suggested_corrections: record.suggested_corrections ?? [],
+    corrections_applied: record.corrections_applied ?? [],
+    unresolved_transcript_flag_ids: record.unresolved_transcript_flag_ids ?? [],
+    translation_review_required: record.translation_review_required ?? (record.language ? record.language !== "en" : false),
+    extraction_safety_status: record.extraction_safety_status ?? "safe",
     client_snapshot: {
       id: record.client_snapshot?.id ?? "",
       age_band: record.client_snapshot?.age_band ?? "",

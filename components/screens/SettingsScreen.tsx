@@ -1,11 +1,11 @@
 "use client";
 
 import { LogOut, ShieldCheck } from "lucide-react";
-import { brightnessLabels, contrastLabels, type Brightness, type ContrastTheme, type DisplaySettings } from "@/lib/settings";
+import { brightnessLabels, contrastLabels, speechSpeedLabels, type Brightness, type ContrastTheme, type DisplaySettings } from "@/lib/settings";
 import type { ConnectionMode, LanguagePack, Tester } from "@/lib/types";
 import { DangerButton, FormField, InfoCard, PrimaryButton, PromptCard, SecondaryButton, SelectField, StatusBadge } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { isSpeechAvailable } from "@/lib/speech";
+import { isSpeechSupported, type SpeechSpeed } from "@/lib/speech";
 
 const brightnessOptions: Array<{ value: Brightness; label: string }> = [
   { value: "low", label: brightnessLabels.low },
@@ -17,6 +17,12 @@ const contrastOptions: Array<{ value: ContrastTheme; label: string; detail: stri
   { value: "standard", label: contrastLabels.standard, detail: "Default dark purple field theme" },
   { value: "high-contrast", label: contrastLabels["high-contrast"], detail: "Brighter borders and text for strong sunlight" },
   { value: "warm", label: contrastLabels.warm, detail: "Warm dark tones, softer on the eyes at dusk" }
+];
+
+const speechSpeedOptions: Array<{ value: SpeechSpeed; label: string }> = [
+  { value: "slow", label: speechSpeedLabels.slow },
+  { value: "normal", label: speechSpeedLabels.normal },
+  { value: "faster", label: speechSpeedLabels.faster }
 ];
 
 export function SettingsScreen({
@@ -84,8 +90,24 @@ export function SettingsScreen({
       </div>
 
       <div className="mb-6">
+        <p className="field-label">Speech speed</p>
+        <div className="grid grid-cols-3 gap-3">
+          {speechSpeedOptions.map((option) => (
+            <button
+              key={option.value}
+              className={option.value === settings.speechSpeed ? "primary-button" : "secondary-button"}
+              onClick={() => onChange({ ...settings, speechSpeed: option.value })}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs opacity-60">Controls how slowly &ldquo;Play aloud&rdquo; speaks client prompts. Normal is still slower than the browser default.</p>
+      </div>
+
+      <div className="mb-6">
         <p className="field-label">Preview</p>
-        <PromptCard eyebrow="Ask the client — say this aloud" prompt="Cover your left eye and read the smallest line you can see." onPlay={() => {}} speechAvailable={isSpeechAvailable()} />
+        <PromptCard eyebrow="Ask the client — say this aloud" prompt="Cover your left eye and read the smallest line you can see." onPlay={() => {}} speechAvailable={isSpeechSupported()} />
       </div>
 
       <PrimaryButton fullWidth onClick={onBack}>

@@ -15,7 +15,7 @@ import { hasUnclearSegments, usedManualOverride } from "./qc";
  * ---------------------------------------------------------------------------
  */
 
-const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confidence_score">, string> = {
+const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confidence_score" | "field_confidence">, string> = {
   comfort_response: "Comfort response",
   cataract_history_confirmed: "Cataract history confirmed",
   current_glasses: "Current glasses",

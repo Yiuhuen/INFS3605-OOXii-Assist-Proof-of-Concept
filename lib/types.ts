@@ -55,6 +55,8 @@ export interface ExtractedFields {
   additional_notes: string;
   missing_fields: string[];
   confidence_score: number;
+  /** Per-field draft-quality metadata — see lib/transcriptQuality.ts buildFieldConfidence. Optional/additive so existing readers of ExtractedFields keep working untouched. */
+  field_confidence?: FieldConfidenceMap;
 }
 
 export const REQUIRED_EXTRACTED_FIELDS: Array<keyof ExtractedFields> = [
@@ -153,6 +155,20 @@ export interface TestRecord {
   processing_status: ProcessingStatus;
   /** Number of times a sync to Supabase has been attempted (success or failure) for this record. */
   sync_attempts: number;
+  /** Overall transcript-content risk from lib/transcriptQuality.ts, frozen at save time. */
+  transcript_quality_risk: TranscriptQualityRisk;
+  /** Full set of transcript-quality flags raised during review, frozen at save time. */
+  transcript_quality_flags: TranscriptQualityFlag[];
+  /** Suggest-only corrections offered during review, frozen at save time. */
+  suggested_corrections: SuggestedCorrection[];
+  /** Corrections the tester actually applied to the corrected transcript, with full history. */
+  corrections_applied: CorrectionHistoryEntry[];
+  /** IDs of transcript_quality_flags not covered by an applied correction — still requires QC attention. */
+  unresolved_transcript_flag_ids: string[];
+  /** True when the record's language is not English, so english_processing_transcript is an unverified processing copy rather than a validated translation. */
+  translation_review_required: boolean;
+  /** "draft_review_required" when extracted_json was built from a transcript that was unsafe to auto-extract from confidently. */
+  extraction_safety_status: ExtractionSafetyStatus;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;
@@ -193,13 +209,110 @@ export interface UnclearSegment {
   note: string;
 }
 
+/**
+ * ---------------------------------------------------------------------------
+ * Transcript quality & translation safety
+ * ---------------------------------------------------------------------------
+ * The transcript is never treated as clinically correct on its own — see
+ * lib/transcriptQuality.ts and lib/translationSafety.ts for the analysers
+ * that produce these types, and lib/qc.ts for how they feed the QC gate.
+ * ---------------------------------------------------------------------------
+ */
+
+export type TranscriptQualityRisk = "low" | "medium" | "high";
+/** Transcript Review screen display state — not persisted; derived live from tester interaction. See app/page.tsx. */
+export type TranscriptReviewStatus = "not_reviewed" | "reviewed_with_corrections" | "reviewed_no_changes" | "sent_to_qc";
+export type FlagSeverity = "info" | "warning" | "critical";
+export type SuggestionConfidence = "low" | "medium" | "high";
+export type FieldConfidenceLevel = "low" | "medium" | "high" | "unknown";
+export type ExtractionSafetyStatus = "safe" | "draft_review_required";
+
+export type TranscriptQualityFlagType =
+  | "possible_misrecognition"
+  | "ambiguous_negation"
+  | "low_confidence"
+  | "missing_expected_term"
+  | "translation_uncertain"
+  | "clinical_contradiction"
+  | "unclear_segment";
+
+export interface TranscriptQualityFlag {
+  id: string;
+  severity: FlagSeverity;
+  type: TranscriptQualityFlagType;
+  originalText: string;
+  suggestedText?: string;
+  reason: string;
+  segmentId?: string;
+  stepId?: string;
+  /** Extra detail beyond the shared type union above — e.g. which translation-risk category (untranslated terms, mixed language, etc.) produced this flag. Display-only. */
+  translationRiskType?: string;
+}
+
+export interface SuggestedCorrection {
+  id: string;
+  originalText: string;
+  suggestedText: string;
+  reason: string;
+  confidence: SuggestionConfidence;
+  applyMode: "suggest_only";
+  /** Links this correction card back to the flag that generated it. */
+  relatedFlagId?: string;
+}
+
+export interface TranscriptQualityReport {
+  overallRisk: TranscriptQualityRisk;
+  flags: TranscriptQualityFlag[];
+  suggestedCorrections: SuggestedCorrection[];
+  unsafeForAutoExtraction: boolean;
+  requiresQc: boolean;
+  summary: string;
+}
+
+/** Record of a suggest-only correction the tester actually applied — never mutates the raw transcript, only correctedTranscriptText. */
+export interface CorrectionHistoryEntry {
+  id: string;
+  originalText: string;
+  suggestedText: string;
+  appliedAt: string;
+  /** tester_id of whoever applied the correction. */
+  appliedBy: string;
+  reason: string;
+  /** True when this correction touches a clinically significant field (eye-side, can/cannot, comfort, cataract, final line, glasses) — adds a QC flag per spec. */
+  affectsClinicalMeaning: boolean;
+}
+
+export interface TranslationSafetyReport {
+  /** False for English — nothing here is a translation, it's the original transcript. */
+  isTranslation: boolean;
+  /** Honest, user-facing label — never claims "accurate translation". */
+  label: string;
+  confidence: FieldConfidenceLevel;
+  flags: TranscriptQualityFlag[];
+  requiresQc: boolean;
+  unsafeForAutoExtraction: boolean;
+  summary: string;
+}
+
+export interface FieldConfidence {
+  value: string;
+  source: "manual" | "transcript" | "corrected_transcript";
+  confidence: FieldConfidenceLevel;
+  requiresReview: boolean;
+  reason?: string;
+}
+
+export type FieldConfidenceMap = Partial<Record<keyof ManualExtractedFields, FieldConfidence>>;
+
 export interface PromptStep {
   id: string;
   icon: string;
   tester_instruction: string;
   client_prompt: string;
-  /** Text passed to the speech engine. Falls back to client_prompt when absent, so a future real voiceover can differ from the on-screen label. */
-  audio_prompt_text?: string;
+  /** Client-friendly phrasing for "Play aloud" TTS — falls back to a cleaned version of client_prompt (see lib/speech.ts buildClientSpokenPrompt) when absent, so on-screen text and spoken text can differ. */
+  spokenPrompt?: string;
+  /** Optional pre-recorded audio for a future human-voiced language pack. When set, "Play aloud" plays this file instead of browser TTS. */
+  audioUrl?: string;
   why_this_matters: string;
 }
 

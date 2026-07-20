@@ -1,4 +1,4 @@
-import type { ProcessingStatus, QCStatus, RecordingStatus, TestRecord } from "./types";
+import type { ProcessingStatus, QCStatus, RecordingStatus, TestRecord, TranscriptQualityRisk } from "./types";
 
 /**
  * ---------------------------------------------------------------------------
@@ -61,7 +61,11 @@ export function evaluateNeedsQc({
   transcriptCaptured,
   manualFallbackUsed,
   hasUnclearSegments = false,
-  hasUnvisitedPrompts = false
+  hasUnvisitedPrompts = false,
+  transcriptQualityRisk = "low",
+  hasClinicalCorrection = false,
+  translationReviewRequired = false,
+  extractionUnsafe = false
 }: {
   recordingStatus: RecordingStatus;
   editedByUser: boolean;
@@ -72,6 +76,14 @@ export function evaluateNeedsQc({
   hasUnclearSegments?: boolean;
   /** True when the tester finished/saved without the swipe-card ever showing one or more of the fixed clinical prompts — the sequence itself is never skipped, but a QC reviewer should confirm the gap. */
   hasUnvisitedPrompts?: boolean;
+  /** Overall transcript-content risk from lib/transcriptQuality.ts — see analyseTranscriptQuality. Medium/high always forces QC. */
+  transcriptQualityRisk?: TranscriptQualityRisk;
+  /** True when an applied suggested correction touched a clinically significant term (eye-side, can/cannot, comfort, cataract, final line, glasses). */
+  hasClinicalCorrection?: boolean;
+  /** True for any non-English record — the English processing copy is an unverified draft, never a validated translation. */
+  translationReviewRequired?: boolean;
+  /** True when the transcript/translation was too uncertain to auto-extract structured fields confidently — see deriveExtractionSafetyStatus. */
+  extractionUnsafe?: boolean;
 }): boolean {
   return (
     recordingStatus !== "recorded" ||
@@ -81,7 +93,11 @@ export function evaluateNeedsQc({
     (recordingStatus === "recorded" && !transcriptCaptured) ||
     manualFallbackUsed ||
     hasUnclearSegments ||
-    hasUnvisitedPrompts
+    hasUnvisitedPrompts ||
+    transcriptQualityRisk !== "low" ||
+    hasClinicalCorrection ||
+    translationReviewRequired ||
+    extractionUnsafe
   );
 }
 
@@ -163,6 +179,14 @@ export function usedManualOverride(record: TestRecord) {
   return record.recording_status === "manual_override" || Boolean(record.manual_override_reason.trim());
 }
 
+/** True when any transcript_quality_flags entry is still uncovered by an applied correction — see unresolved_transcript_flag_ids. */
+export function hasUnresolvedCriticalTranscriptFlag(record: TestRecord) {
+  return record.unresolved_transcript_flag_ids.some((flagId) => {
+    const flag = record.transcript_quality_flags.find((candidate) => candidate.id === flagId);
+    return flag?.severity === "critical";
+  });
+}
+
 export function recordNeedsQc(record: TestRecord) {
   // QC sign-off is terminal for data-quality issues, but sync problems remain
   // visible because the demo/export flows need to show pending local records.
@@ -178,7 +202,12 @@ export function recordNeedsQc(record: TestRecord) {
     record.has_unvisited_prompts ||
     record.qc_status === "Unreviewed" ||
     record.sync_status === "Pending sync" ||
-    record.sync_status === "Failed"
+    record.sync_status === "Failed" ||
+    record.transcript_quality_risk !== "low" ||
+    hasUnresolvedCriticalTranscriptFlag(record) ||
+    record.translation_review_required ||
+    record.extraction_safety_status === "draft_review_required" ||
+    record.corrections_applied.some((correction) => correction.affectsClinicalMeaning)
   );
 }
 
@@ -186,6 +215,7 @@ export function qcReasons(record: TestRecord): string[] {
   if (record.qc_status === "Approved") return ["QC complete"];
   const reasons: string[] = [];
   if (recordingIncomplete(record)) reasons.push(`Recording ${record.recording_status.replace("_", " ")}`);
+  if (record.recording_status === "recorded" && !record.raw_transcript_text.trim()) reasons.push("Audio recorded but no transcript captured");
   if (isLowConfidence(record)) reasons.push("Low confidence");
   if (hasMissingFields(record)) reasons.push("Missing fields");
   if (record.edited_by_user) reasons.push("Edited by tester");
@@ -193,6 +223,24 @@ export function qcReasons(record: TestRecord): string[] {
   if (record.has_unvisited_prompts) reasons.push("Prompt(s) not shown");
   if (record.sync_status === "Pending sync") reasons.push("Pending sync");
   if (record.sync_status === "Failed") reasons.push("Sync failed");
+
+  for (const flag of record.transcript_quality_flags) {
+    if (flag.type === "possible_misrecognition" && flag.suggestedText) {
+      reasons.push(`Possible STT misrecognition: '${flag.originalText}' may mean '${flag.suggestedText}'`);
+    }
+  }
+  if (record.transcript_quality_flags.some((flag) => flag.type === "ambiguous_negation")) {
+    reasons.push('Negation ambiguity: \'can see\' vs \'cannot see\'');
+  }
+  if (record.transcript_quality_flags.some((flag) => flag.type === "clinical_contradiction")) {
+    reasons.push("Eye-side ambiguity detected");
+  }
+  if (record.translation_review_required) reasons.push("Translation requires review");
+  if (record.corrections_applied.some((correction) => correction.affectsClinicalMeaning)) {
+    reasons.push("Clinical field edited after transcript review");
+  }
+  if (record.extraction_safety_status === "draft_review_required") reasons.push("Draft extraction — requires review");
+
   if (record.qc_status === "Unreviewed") reasons.push("Unreviewed");
   return reasons;
 }

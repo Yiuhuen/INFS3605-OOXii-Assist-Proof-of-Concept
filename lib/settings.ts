@@ -1,16 +1,26 @@
+import type { SpeechSpeed } from "./speech";
+
 export type Brightness = "low" | "medium" | "high";
 export type ContrastTheme = "standard" | "high-contrast" | "warm";
 
 export interface DisplaySettings {
   brightness: Brightness;
   contrast: ContrastTheme;
+  speechSpeed: SpeechSpeed;
 }
 
 const SETTINGS_KEY = "ooxii_assist_display_settings";
 
 export const defaultDisplaySettings: DisplaySettings = {
   brightness: "medium",
-  contrast: "standard"
+  contrast: "standard",
+  speechSpeed: "normal"
+};
+
+export const speechSpeedLabels: Record<SpeechSpeed, string> = {
+  slow: "Slow",
+  normal: "Normal",
+  faster: "Faster"
 };
 
 export const brightnessLabels: Record<Brightness, string> = {
@@ -33,7 +43,8 @@ export function loadDisplaySettings(): DisplaySettings {
     const parsed = JSON.parse(raw) as Partial<DisplaySettings>;
     return {
       brightness: parsed.brightness ?? defaultDisplaySettings.brightness,
-      contrast: parsed.contrast ?? defaultDisplaySettings.contrast
+      contrast: parsed.contrast ?? defaultDisplaySettings.contrast,
+      speechSpeed: parsed.speechSpeed ?? defaultDisplaySettings.speechSpeed
     };
   } catch {
     return defaultDisplaySettings;

@@ -86,11 +86,19 @@ export const AUDIT_CSV_COLUMNS = [
   "has_unvisited_prompts",
   "processing_status",
   "sync_attempts",
+  "transcript_quality_risk",
+  "transcript_quality_flags",
+  "suggested_corrections",
+  "corrections_applied",
+  "unresolved_transcript_flags",
+  "translation_review_required",
+  "extraction_safety_status",
   "created_at",
   "updated_at"
 ] as const;
 
 function auditRow(record: TestRecord) {
+  const unresolvedFlags = record.transcript_quality_flags.filter((flag) => record.unresolved_transcript_flag_ids.includes(flag.id));
   return [
     ...longlistRow(record),
     record.language,
@@ -109,6 +117,13 @@ function auditRow(record: TestRecord) {
     record.has_unvisited_prompts ? "yes" : "no",
     record.processing_status,
     record.sync_attempts,
+    record.transcript_quality_risk,
+    JSON.stringify(record.transcript_quality_flags),
+    JSON.stringify(record.suggested_corrections),
+    JSON.stringify(record.corrections_applied),
+    `${unresolvedFlags.length}: ${unresolvedFlags.map((flag) => flag.reason).join("; ")}`,
+    record.translation_review_required ? "yes" : "no",
+    record.extraction_safety_status,
     record.created_at,
     record.updated_at
   ];

@@ -1,12 +1,12 @@
 "use client";
 
-import { Save, Zap } from "lucide-react";
-import type { ExtractedFields, ProcessingStatus } from "@/lib/types";
+import { Save, ShieldAlert, Zap } from "lucide-react";
+import type { ExtractedFields, ExtractionSafetyStatus, ProcessingStatus } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
-import { FormField, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard } from "@/components/ui";
+import { InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
-const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confidence_score">, string> = {
+const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confidence_score" | "field_confidence">, string> = {
   right_eye_distance_result: "Right eye distance result",
   left_eye_distance_result: "Left eye distance result",
   final_readable_line: "Final readable line",
@@ -25,7 +25,8 @@ export function CapturedFieldsScreen({
   isOnline,
   onEditField,
   onBackToTranscript,
-  onSave
+  onSave,
+  extractionSafetyStatus
 }: {
   clientId: string;
   extracted: ExtractedFields;
@@ -35,10 +36,12 @@ export function CapturedFieldsScreen({
   onEditField: (key: keyof ExtractedFields, value: string) => void;
   onBackToTranscript: () => void;
   onSave: () => void;
+  /** "draft_review_required" when the transcript/translation this extraction is based on was flagged uncertain — see lib/transcriptQuality.ts deriveExtractionSafetyStatus. */
+  extractionSafetyStatus: ExtractionSafetyStatus;
 }) {
   const effective = editedFields ?? extracted;
   const lowConfidence = effective.confidence_score < 0.7 || effective.missing_fields.length > 0;
-  const qcRequired = lowConfidence || Boolean(editedFields);
+  const qcRequired = lowConfidence || Boolean(editedFields) || extractionSafetyStatus === "draft_review_required";
 
   return (
     <section>
@@ -54,18 +57,36 @@ export function CapturedFieldsScreen({
         {qcRequired && <StatusBadge label="Needs QC" tone="danger" />}
       </div>
 
+      {extractionSafetyStatus === "draft_review_required" && (
+        <div className="mb-5">
+          <WarningCard icon={<ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />}>
+            Draft extraction — requires review. These fields were drafted from a transcript flagged with quality or
+            translation risk; verify each one against the audio before treating it as correct.
+          </WarningCard>
+        </div>
+      )}
+
       <div className="space-y-4">
         {(Object.keys(FIELD_LABELS) as Array<keyof typeof FIELD_LABELS>).map((key) => {
           const missing = effective.missing_fields.includes(key);
+          const fieldMeta = effective.field_confidence?.[key];
+          const flagConfidence = fieldMeta && (fieldMeta.confidence === "low" || fieldMeta.confidence === "unknown");
           return (
-            <FormField
-              key={key}
-              label={FIELD_LABELS[key]}
-              className={missing ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}
-              value={effective[key]}
-              placeholder={missing ? "Not captured" : undefined}
-              onChange={(event) => onEditField(key, event.target.value)}
-            />
+            <label key={key} className={`block ${missing || flagConfidence ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}`}>
+              <span className="field-label flex flex-wrap items-center gap-2">
+                {FIELD_LABELS[key]}
+                {fieldMeta && flagConfidence && (
+                  <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone="warn" />
+                )}
+              </span>
+              <input
+                className="field-input"
+                value={effective[key]}
+                placeholder={missing ? "Not captured" : undefined}
+                onChange={(event) => onEditField(key, event.target.value)}
+              />
+              {fieldMeta?.reason && flagConfidence && <p className="mt-1 text-xs opacity-60">{fieldMeta.reason}</p>}
+            </label>
           );
         })}
       </div>

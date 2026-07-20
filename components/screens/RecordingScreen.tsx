@@ -11,10 +11,12 @@ import {
   Mic,
   Pause,
   Play,
+  RotateCcw,
   Square,
-  Volume2
+  Volume2,
+  VolumeX
 } from "lucide-react";
-import type { ManualExtractedFields, PromptStep, RecordingStatus, TranscriptSegment, UnclearSegment } from "@/lib/types";
+import type { LanguageCode, ManualExtractedFields, PromptStep, RecordingStatus, TranscriptSegment, UnclearSegment } from "@/lib/types";
 import {
   Disclosure,
   FormField,
@@ -27,7 +29,7 @@ import {
   WarningCard
 } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { isSpeechAvailable } from "@/lib/speech";
+import { buildClientSpokenPrompt, isSpeechSupported, speakPrompt, stopSpeaking, type SpeechSpeed } from "@/lib/speech";
 import { type TranscriptEngineStatus } from "@/lib/liveTranscript";
 
 /** Dev diagnostics panel: on by default outside production, or opt-in in production via NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG=true. Both sides are inlined at build time by Next.js. */
@@ -156,16 +158,25 @@ function CompactPromptCard({
   totalSteps,
   languageName,
   englishGloss,
-  onPlay,
-  speechAvailable
+  isSpeaking,
+  isAudioMode,
+  voiceInfoMessage,
+  speechAvailable,
+  onPlayToggle,
+  onReplay
 }: {
   step: PromptStep;
   stepIndex: number;
   totalSteps: number;
   languageName: string;
   englishGloss?: string;
-  onPlay: () => void;
+  isSpeaking: boolean;
+  /** True when this step plays a pre-recorded audio file rather than browser TTS. */
+  isAudioMode: boolean;
+  voiceInfoMessage: string | null;
   speechAvailable: boolean;
+  onPlayToggle: () => void;
+  onReplay: () => void;
 }) {
   const [whyOpen, setWhyOpen] = useState(false);
 
@@ -189,15 +200,32 @@ function CompactPromptCard({
       </p>
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" className="chip-button" onClick={onPlay} disabled={!speechAvailable} title={speechAvailable ? undefined : "Speech playback unavailable on this device"}>
-          <Volume2 className="h-3.5 w-3.5" />
-          Play aloud
+        <button
+          type="button"
+          className="chip-button"
+          onClick={onPlayToggle}
+          disabled={!speechAvailable}
+          title={speechAvailable ? undefined : "Speech playback unavailable on this device"}
+        >
+          {isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+          {isSpeaking ? "Stop speaking" : "Play aloud"}
         </button>
+        {isSpeaking && <StatusBadge label={isAudioMode ? "Recorded audio" : "Speaking…"} tone="warn" />}
+        {!isSpeaking && speechAvailable && (
+          <button type="button" className="chip-button" onClick={onReplay} title="Replay from the start">
+            <RotateCcw className="h-3.5 w-3.5" />
+            Replay
+          </button>
+        )}
         <button type="button" className={`chip-button ${whyOpen ? "is-active" : ""}`} onClick={() => setWhyOpen((value) => !value)} aria-expanded={whyOpen}>
           <HelpCircle className="h-3.5 w-3.5" />
           Why this matters
         </button>
       </div>
+      <p className="mt-1.5 text-[11px] opacity-50">
+        Speaks the client-facing prompt only.
+        {voiceInfoMessage && ` ${voiceInfoMessage}.`}
+      </p>
       {whyOpen && <p className="mt-2 text-xs leading-relaxed opacity-70">{step.why_this_matters}</p>}
     </div>
   );
@@ -547,6 +575,8 @@ export function RecordingScreen({
   totalSteps,
   upcomingSteps,
   languageName,
+  languageCode,
+  speechSpeed,
   englishGloss,
   manualFields,
   setManualFields,
@@ -578,7 +608,6 @@ export function RecordingScreen({
   onStopSttOnlyTest,
   unclearSegments,
   onMarkUnclear,
-  speakPrompt,
   startRecording,
   pauseRecording,
   resumeRecording,
@@ -594,6 +623,8 @@ export function RecordingScreen({
   totalSteps: number;
   upcomingSteps: PromptStep[];
   languageName: string;
+  languageCode: LanguageCode;
+  speechSpeed: SpeechSpeed;
   englishGloss?: string;
   manualFields: ManualExtractedFields;
   setManualFields: (fields: ManualExtractedFields) => void;
@@ -626,7 +657,6 @@ export function RecordingScreen({
   onStopSttOnlyTest: () => void;
   unclearSegments: UnclearSegment[];
   onMarkUnclear: () => void;
-  speakPrompt: (text: string) => void;
   startRecording: () => void;
   pauseRecording: () => void;
   resumeRecording: () => void;
@@ -644,6 +674,58 @@ export function RecordingScreen({
   const recordingLabel = recording && !paused ? "Recording" : recording && paused ? "Paused" : recordingStatus === "recorded" ? "Recorded" : "Not started";
   const recordingTone = recording && !paused ? "danger" : recordingStatus === "recorded" ? "good" : "warn";
   const canMarkUnclear = recordingEverStarted && !micError;
+
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceInfoMessage, setVoiceInfoMessage] = useState<string | null>(null);
+  const speechAvailable = isSpeechSupported() || Boolean(step.audioUrl);
+  const isAudioMode = Boolean(step.audioUrl);
+
+  function playStepAloud() {
+    speakPrompt({
+      text: buildClientSpokenPrompt(step),
+      languageCode,
+      speed: speechSpeed,
+      audioUrl: step.audioUrl,
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => setIsSpeaking(false),
+      onError: () => setIsSpeaking(false),
+      onVoiceInfo: (message) => setVoiceInfoMessage(message)
+    });
+  }
+
+  function handlePlayToggle() {
+    if (isSpeaking) {
+      stopSpeaking();
+      setIsSpeaking(false);
+      return;
+    }
+    playStepAloud();
+  }
+
+  function handleStopRecording() {
+    stopSpeaking();
+    setIsSpeaking(false);
+    stopRecording();
+  }
+
+  function handleFinish() {
+    stopSpeaking();
+    setIsSpeaking(false);
+    onFinish();
+  }
+
+  // A new prompt is showing (swipe, Prev/Next, or arrow keys) — any
+  // in-flight speech for the previous prompt must not keep talking over it.
+  useEffect(() => {
+    stopSpeaking();
+    setIsSpeaking(false);
+    setVoiceInfoMessage(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step.id]);
+
+  useEffect(() => {
+    return () => stopSpeaking();
+  }, []);
 
   const [edgeMessage, setEdgeMessage] = useState<string | null>(null);
   const edgeMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -737,8 +819,12 @@ export function RecordingScreen({
           totalSteps={totalSteps}
           languageName={languageName}
           englishGloss={englishGloss}
-          onPlay={() => speakPrompt(step.audio_prompt_text ?? step.client_prompt)}
-          speechAvailable={isSpeechAvailable()}
+          isSpeaking={isSpeaking}
+          isAudioMode={isAudioMode}
+          voiceInfoMessage={voiceInfoMessage}
+          speechAvailable={speechAvailable}
+          onPlayToggle={handlePlayToggle}
+          onReplay={playStepAloud}
         />
       </div>
 
@@ -800,7 +886,7 @@ export function RecordingScreen({
             </SecondaryButton>
           )}
           {recording && (
-            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Square className="h-4 w-4" />} onClick={stopRecording}>
+            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Square className="h-4 w-4" />} onClick={handleStopRecording}>
               Stop
             </SecondaryButton>
           )}
@@ -892,7 +978,7 @@ export function RecordingScreen({
         >
           Mark unclear
         </SecondaryButton>
-        <PrimaryButton fullWidth className="py-2.5 text-sm" disabled={!canFinish} icon={<Flag className="h-4 w-4" />} onClick={onFinish}>
+        <PrimaryButton fullWidth className="py-2.5 text-sm" disabled={!canFinish} icon={<Flag className="h-4 w-4" />} onClick={handleFinish}>
           Finish &amp; review transcript
         </PrimaryButton>
       </div>

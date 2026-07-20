@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { LanguageCode, LanguagePack, PromptStep } from "@/lib/types";
 import { PrimaryButton, PromptCard, SelectField, StatusBadge, TextAreaField } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { isSpeechAvailable } from "@/lib/speech";
+import { isSpeechSupported } from "@/lib/speech";
 
 export function AdminScreen({
   packs,
@@ -86,9 +86,9 @@ export function AdminScreen({
             rows={3}
           />
           <TextAreaField
-            label="Audio prompt text (spoken aloud — can differ from on-screen text)"
-            value={draft.audio_prompt_text ?? draft.client_prompt}
-            onChange={(event) => setDraft({ ...draft, audio_prompt_text: event.target.value })}
+            label="Spoken prompt (client-friendly — what &ldquo;Play aloud&rdquo; speaks, can differ from on-screen text)"
+            value={draft.spokenPrompt ?? draft.client_prompt}
+            onChange={(event) => setDraft({ ...draft, spokenPrompt: event.target.value })}
             rows={3}
           />
           <TextAreaField
@@ -104,7 +104,7 @@ export function AdminScreen({
               eyebrow="Ask the client — say this aloud"
               prompt={draft.client_prompt}
               onPlay={() => {}}
-              speechAvailable={isSpeechAvailable()}
+              speechAvailable={isSpeechSupported()}
             />
           </div>
 

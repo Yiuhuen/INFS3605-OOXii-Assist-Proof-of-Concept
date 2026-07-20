@@ -4,8 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
 import type { ExtractedFields, TestRecord } from "@/lib/types";
 import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasons, type QcFilter } from "@/lib/qc";
-import { EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField } from "@/components/ui";
+import { Disclosure, EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField, type BadgeTone } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
+
+const RISK_TONE: Record<"low" | "medium" | "high", BadgeTone> = { low: "good", medium: "warn", high: "danger" };
+const SEVERITY_TONE: Record<"info" | "warning" | "critical", BadgeTone> = { info: "neutral", warning: "warn", critical: "danger" };
 
 export function QcScreen({
   records,
@@ -198,11 +201,64 @@ export function QcScreen({
           </div>
 
           <div>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <p className="field-label mb-0">Transcript quality</p>
+              <StatusBadge label={`Risk: ${selected.transcript_quality_risk}`} tone={RISK_TONE[selected.transcript_quality_risk]} />
+              {selected.translation_review_required && <StatusBadge label="Translation requires review" tone="warn" />}
+              {selected.extraction_safety_status === "draft_review_required" && <StatusBadge label="Draft extraction — requires review" tone="warn" />}
+            </div>
+            {selected.transcript_quality_flags.length === 0 ? (
+              <p className="text-sm opacity-60">No transcript quality flags were raised for this record.</p>
+            ) : (
+              <Disclosure label={`Quality flags (${selected.transcript_quality_flags.length})`} defaultOpen>
+                <div className="space-y-3">
+                  {selected.transcript_quality_flags.map((flag) => (
+                    <div key={flag.id} className="rounded-xl border border-field-line bg-field-surface p-3">
+                      <div className="mb-1 flex flex-wrap items-center gap-2">
+                        <StatusBadge label={flag.type.replaceAll("_", " ")} tone={SEVERITY_TONE[flag.severity]} />
+                        {selected.unresolved_transcript_flag_ids.includes(flag.id) ? (
+                          <StatusBadge label="Unresolved" tone="warn" />
+                        ) : (
+                          <StatusBadge label="Correction applied" tone="good" />
+                        )}
+                      </div>
+                      <p>
+                        Detected: &ldquo;{flag.originalText}&rdquo;
+                        {flag.suggestedText && (
+                          <>
+                            {" "}
+                            → Suggested: &ldquo;{flag.suggestedText}&rdquo;
+                          </>
+                        )}
+                      </p>
+                      <p className="mt-1 text-xs opacity-60">{flag.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </Disclosure>
+            )}
+            {selected.corrections_applied.length > 0 && (
+              <div className="mt-3">
+                <Disclosure label={`Corrections applied (${selected.corrections_applied.length})`}>
+                  <div className="space-y-2">
+                    {selected.corrections_applied.map((correction) => (
+                      <p key={correction.id} className="text-sm opacity-80">
+                        &ldquo;{correction.originalText}&rdquo; → &ldquo;{correction.suggestedText}&rdquo; — applied {new Date(correction.appliedAt).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                        {correction.affectsClinicalMeaning && <span className="ml-2 text-xs font-bold text-[var(--danger)]">Clinical</span>}
+                      </p>
+                    ))}
+                  </div>
+                </Disclosure>
+              </div>
+            )}
+          </div>
+
+          <div>
             <p className="field-label">Review captured fields</p>
             <p className="mb-3 text-xs opacity-60">Missing fields are highlighted. Editing here flags the record as edited for verification.</p>
             <div className="space-y-3">
               {(Object.entries(effective) as Array<[string, string | number | string[]]>)
-                .filter(([key]) => key !== "missing_fields" && key !== "confidence_score")
+                .filter(([key]) => key !== "missing_fields" && key !== "confidence_score" && key !== "field_confidence")
                 .map(([key, value]) => {
                   const missing = selected.missing_fields.includes(key);
                   return (
