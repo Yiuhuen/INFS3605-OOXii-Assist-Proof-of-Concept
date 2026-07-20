@@ -18,3 +18,10 @@ export function generateSegmentId() {
   }
   return `SEG-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 }
+
+export function generateMarkerId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `MRK-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+}

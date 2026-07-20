@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   AlertTriangle,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Flag,
   HelpCircle,
   Mic,
   Pause,
@@ -47,6 +49,101 @@ function formatClock(isoTimestamp: string) {
   const date = new Date(isoTimestamp);
   if (Number.isNaN(date.getTime())) return "--:--:--";
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+const SWIPE_THRESHOLD_PX = 60;
+const SWIPE_DRAG_CLAMP_PX = 90;
+const INTERACTIVE_SELECTOR = "textarea, input, select, button, a, [role='button']";
+
+/**
+ * Pointer-based swipe gesture for the prompt card — touch, mouse, and pen all
+ * go through the same Pointer Events path, so this works on mobile Chrome,
+ * iOS Safari, and desktop drag without separate touch/mouse handlers.
+ *
+ * A gesture starting on an interactive child (buttons inside the card,
+ * inputs elsewhere) never begins tracking, so it can't hijack a tap or a
+ * text-field drag. `touch-action: pan-y` on the card (applied by the caller)
+ * lets the browser keep handling vertical scroll natively — this hook only
+ * ever reacts to horizontal movement, so a vertical scroll gesture never
+ * turns into an accidental prompt change.
+ */
+function useSwipeCard({
+  onSwipeLeft,
+  onSwipeRight,
+  disabled
+}: {
+  onSwipeLeft: () => void;
+  onSwipeRight: () => void;
+  disabled: boolean;
+}) {
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const gestureRef = useRef<{ pointerId: number; startX: number; startY: number } | null>(null);
+
+  function reset() {
+    gestureRef.current = null;
+    setDragging(false);
+    setDragX(0);
+  }
+
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (disabled) return;
+    const target = event.target as HTMLElement;
+    if (target.closest(INTERACTIVE_SELECTOR)) return;
+    gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY };
+    setDragging(true);
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const dx = event.clientX - gesture.startX;
+    const dy = event.clientY - gesture.startY;
+    // Only follow the drag visually once the gesture is clearly horizontal —
+    // a vertical scroll never nudges the card sideways.
+    if (Math.abs(dx) > Math.abs(dy)) {
+      setDragX(Math.max(-SWIPE_DRAG_CLAMP_PX, Math.min(SWIPE_DRAG_CLAMP_PX, dx)));
+    }
+  }
+
+  function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) {
+      reset();
+      return;
+    }
+    const dx = event.clientX - gesture.startX;
+    const dy = event.clientY - gesture.startY;
+    reset();
+    if (Math.abs(dx) < SWIPE_THRESHOLD_PX || Math.abs(dx) <= Math.abs(dy)) return;
+    if (dx < 0) onSwipeLeft();
+    else onSwipeRight();
+  }
+
+  return {
+    dragX,
+    dragging,
+    handlers: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onPointerCancel: reset
+    }
+  };
+}
+
+/** "● ○ ○ ○" — a small progress row, not a heavy carousel control. Highlights the active step only. */
+function ProgressDots({ total, current }: { total: number; current: number }) {
+  return (
+    <div className="flex items-center justify-center gap-1.5" role="img" aria-label={`Step ${current + 1} of ${total}`}>
+      {Array.from({ length: total }).map((_, index) => (
+        <span
+          key={index}
+          className={`h-1.5 rounded-full transition-all ${index === current ? "w-5 bg-[var(--gold)]" : "w-1.5 bg-field-line"}`}
+        />
+      ))}
+    </div>
+  );
 }
 
 /** Compact sticky prompt card — step context, the client-facing question, and
@@ -456,7 +553,6 @@ export function RecordingScreen({
   recording,
   paused,
   elapsedSeconds,
-  audioUrl,
   micError,
   overrideReason,
   setOverrideReason,
@@ -465,7 +561,7 @@ export function RecordingScreen({
   recordingStatus,
   isOnline,
   nudgeVisible,
-  canProceed,
+  canFinish,
   transcriptSegments,
   interimText,
   transcriptUnavailable,
@@ -488,7 +584,9 @@ export function RecordingScreen({
   resumeRecording,
   stopRecording,
   onBack,
-  onNext
+  onNextPrompt,
+  onPreviousPrompt,
+  onFinish
 }: {
   clientId: string;
   step: PromptStep;
@@ -502,7 +600,6 @@ export function RecordingScreen({
   recording: boolean;
   paused: boolean;
   elapsedSeconds: number;
-  audioUrl: string;
   micError: boolean;
   overrideReason: string;
   setOverrideReason: (value: string) => void;
@@ -511,7 +608,8 @@ export function RecordingScreen({
   recordingStatus: RecordingStatus;
   isOnline: boolean;
   nudgeVisible: boolean;
-  canProceed: boolean;
+  /** Gates only the "Finish & review transcript" action — prompt navigation (swipe/Prev/Next/arrow keys) is always allowed so the tester can browse cards freely while recording continues underneath. */
+  canFinish: boolean;
   transcriptSegments: TranscriptSegment[];
   interimText: string;
   transcriptUnavailable: boolean;
@@ -534,27 +632,135 @@ export function RecordingScreen({
   resumeRecording: () => void;
   stopRecording: () => void;
   onBack?: () => void;
-  onNext: () => void;
+  /** Swipe left / fallback "Next" / ArrowRight — moves to the next prompt card. Saves a timestamped marker; never affects recording, transcript, or timer. */
+  onNextPrompt: () => void;
+  /** Swipe right / fallback "Previous" / ArrowLeft — moves to the previous prompt card. Never deletes transcript or markers. */
+  onPreviousPrompt: () => void;
+  onFinish: () => void;
 }) {
+  const isFirstStep = stepIndex === 0;
   const isLastStep = stepIndex === totalSteps - 1;
   const recordingEverStarted = recording || paused || recordingStatus === "recorded";
   const recordingLabel = recording && !paused ? "Recording" : recording && paused ? "Paused" : recordingStatus === "recorded" ? "Recorded" : "Not started";
   const recordingTone = recording && !paused ? "danger" : recordingStatus === "recorded" ? "good" : "warn";
   const canMarkUnclear = recordingEverStarted && !micError;
 
+  const [edgeMessage, setEdgeMessage] = useState<string | null>(null);
+  const edgeMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Rapid successive swipes/taps/key presses share this lock so a burst of
+  // input can't fire two navigations (and two markers) for what reads as one
+  // gesture — released a beat after each successful navigation.
+  const navigationLockRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (edgeMessageTimeoutRef.current) clearTimeout(edgeMessageTimeoutRef.current);
+    };
+  }, []);
+
+  function flashEdgeMessage(message: string) {
+    setEdgeMessage(message);
+    if (edgeMessageTimeoutRef.current) clearTimeout(edgeMessageTimeoutRef.current);
+    edgeMessageTimeoutRef.current = setTimeout(() => setEdgeMessage(null), 1600);
+  }
+
+  function withNavigationLock(action: () => void) {
+    if (navigationLockRef.current) return;
+    navigationLockRef.current = true;
+    action();
+    setTimeout(() => {
+      navigationLockRef.current = false;
+    }, 250);
+  }
+
+  const attemptNext = useCallback(() => {
+    if (isLastStep) {
+      flashEdgeMessage("Final prompt reached");
+      return;
+    }
+    withNavigationLock(onNextPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLastStep, onNextPrompt]);
+
+  const attemptPrevious = useCallback(() => {
+    if (isFirstStep) {
+      flashEdgeMessage("First prompt");
+      return;
+    }
+    withNavigationLock(onPreviousPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFirstStep, onPreviousPrompt]);
+
+  // Manual-fallback panel open → swipe is disabled outright (the tester's
+  // thumb is busy typing right above the card). Keyboard arrows are guarded
+  // separately below by focus, which already covers "typing in a field".
+  const { dragX, dragging, handlers: swipeHandlers } = useSwipeCard({
+    onSwipeLeft: attemptNext,
+    onSwipeRight: attemptPrevious,
+    disabled: showOverrideInput
+  });
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const active = document.activeElement as HTMLElement | null;
+      const isEditingField =
+        active !== null &&
+        (active.tagName === "TEXTAREA" || active.tagName === "INPUT" || active.tagName === "SELECT" || active.isContentEditable);
+      if (isEditingField) return;
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        attemptNext();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        attemptPrevious();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [attemptNext, attemptPrevious]);
+
   return (
     <section>
       <ScreenHeader title="Record conversation" subtitle={clientId} onBack={onBack} isOnline={isOnline} />
 
-      <CompactPromptCard
-        step={step}
-        stepIndex={stepIndex}
-        totalSteps={totalSteps}
-        languageName={languageName}
-        englishGloss={englishGloss}
-        onPlay={() => speakPrompt(step.audio_prompt_text ?? step.client_prompt)}
-        speechAvailable={isSpeechAvailable()}
-      />
+      <div className="mb-2">
+        <ProgressDots total={totalSteps} current={stepIndex} />
+      </div>
+
+      <div
+        {...swipeHandlers}
+        style={{ touchAction: "pan-y", transform: `translateX(${dragX}px)`, transition: dragging ? "none" : "transform 200ms ease" }}
+      >
+        <CompactPromptCard
+          step={step}
+          stepIndex={stepIndex}
+          totalSteps={totalSteps}
+          languageName={languageName}
+          englishGloss={englishGloss}
+          onPlay={() => speakPrompt(step.audio_prompt_text ?? step.client_prompt)}
+          speechAvailable={isSpeechAvailable()}
+        />
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          className="chip-button"
+          onClick={attemptPrevious}
+          disabled={isFirstStep}
+          aria-label="Previous prompt"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+          Previous
+        </button>
+        <p className="min-w-0 flex-1 truncate text-center text-[11px] opacity-50">
+          {edgeMessage ?? "Swipe left for next prompt · right for previous"}
+        </p>
+        <button type="button" className="chip-button" onClick={attemptNext} disabled={isLastStep} aria-label="Next prompt">
+          Next
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
+      </div>
 
       {nudgeVisible && (
         <div className="mt-3">
@@ -601,13 +807,8 @@ export function RecordingScreen({
         </div>
 
         {!isOnline && <p className="mt-2 text-[11px] opacity-60">Processing can happen after sync — this test still completes fully offline.</p>}
-
-        {recordingStatus === "recorded" && !recording && audioUrl && !micError && (
-          <div className="mt-2.5">
-            <Disclosure label="Audio preview">
-              <audio className="w-full" controls src={audioUrl} />
-            </Disclosure>
-          </div>
+        {recordingStatus === "recorded" && !recording && !micError && (
+          <p className="mt-2 text-[11px] opacity-60">Audio playback is available on the review screen after Finish &amp; review.</p>
         )}
       </div>
 
@@ -691,8 +892,8 @@ export function RecordingScreen({
         >
           Mark unclear
         </SecondaryButton>
-        <PrimaryButton fullWidth className="py-2.5 text-sm" disabled={!canProceed} icon={<ChevronRight className="h-4 w-4" />} onClick={onNext}>
-          {isLastStep ? "Finish & review" : "Next prompt"}
+        <PrimaryButton fullWidth className="py-2.5 text-sm" disabled={!canFinish} icon={<Flag className="h-4 w-4" />} onClick={onFinish}>
+          Finish &amp; review transcript
         </PrimaryButton>
       </div>
     </section>

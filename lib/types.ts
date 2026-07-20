@@ -130,6 +130,8 @@ export interface TestRecord {
   transcript_segments: TranscriptSegment[];
   /** Markers recorded each time the tester moved to a new prompt during the recording. */
   prompt_markers: PromptMarker[];
+  /** True when one or more prompts in the active pack's fixed clinical sequence were never shown while recording — the sequence itself was never reordered/skipped, but a QC reviewer should confirm the gap. Derived from prompt_markers vs. the pack at save time. */
+  has_unvisited_prompts: boolean;
   /** Moments the tester flagged as unclear during recording — always require QC review. */
   unclear_segments: UnclearSegment[];
   /** Optional tester/QC edited transcript. Raw transcript is preserved separately. */
@@ -167,11 +169,20 @@ export interface TranscriptSegment {
   stepId: string;
 }
 
+/** How the tester arrived at the prompt this marker records — "start" is the first prompt shown when recording begins, "next"/"previous" are card swipes (or their fallback buttons/arrow keys), "finish" is logged when the tester ends the recording. */
+export type PromptNavigationAction = "start" | "next" | "previous" | "finish";
+
 export interface PromptMarker {
+  id: string;
   stepId: string;
-  timestamp: string;
+  /** Index of this step within the active language pack's fixed clinical sequence — never reorderable. */
+  stepIndex: number;
+  /** Epoch milliseconds — cheap to compare/debounce against. See createdAt for a human-readable value. */
+  timestamp: number;
   promptText: string;
   language: LanguageCode;
+  navigationAction: PromptNavigationAction;
+  createdAt: string;
 }
 
 /** A tester-flagged moment where the live transcript assist (or audio) was unclear — always requires QC review. */

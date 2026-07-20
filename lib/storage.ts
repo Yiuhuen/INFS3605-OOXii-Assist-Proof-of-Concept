@@ -64,6 +64,7 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     english_processing_transcript: record.english_processing_transcript ?? "",
     transcript_segments: record.transcript_segments ?? [],
     prompt_markers: record.prompt_markers ?? [],
+    has_unvisited_prompts: record.has_unvisited_prompts ?? false,
     unclear_segments: record.unclear_segments ?? [],
     corrected_transcript_text: record.corrected_transcript_text ?? "",
     extracted_json: { ...createEmptyExtractedFields(), ...record.extracted_json },

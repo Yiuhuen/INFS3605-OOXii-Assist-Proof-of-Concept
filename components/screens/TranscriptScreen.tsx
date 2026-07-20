@@ -12,11 +12,18 @@ function formatDuration(totalSeconds: number) {
   return `${minutes}:${seconds}`;
 }
 
-function formatClock(isoTimestamp: string) {
-  const date = new Date(isoTimestamp);
+function formatClock(timestamp: string | number) {
+  const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "--:--:--";
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
+
+const NAVIGATION_ACTION_LABELS: Record<PromptMarker["navigationAction"], string> = {
+  start: "Started",
+  next: "Swiped next",
+  previous: "Swiped back",
+  finish: "Finished"
+};
 
 export function TranscriptScreen({
   clientId,
@@ -32,6 +39,7 @@ export function TranscriptScreen({
   recordingDurationSeconds,
   unclearSegments,
   promptMarkers,
+  missingPromptLabels,
   isOnline,
   canGenerateDraft,
   onGenerateDraft,
@@ -51,6 +59,8 @@ export function TranscriptScreen({
   recordingDurationSeconds: number;
   unclearSegments: UnclearSegment[];
   promptMarkers: PromptMarker[];
+  /** Client-facing prompt text for any fixed-sequence step the swipe card never showed while recording — never a reorder, just a gap to flag. */
+  missingPromptLabels: string[];
   isOnline: boolean;
   /** True when recording happened but no live transcript segments were captured — audio exists, so a manual rebuild is worth offering instead of leaving the tester stuck. */
   canGenerateDraft: boolean;
@@ -108,6 +118,15 @@ export function TranscriptScreen({
         </div>
       )}
 
+      {missingPromptLabels.length > 0 && (
+        <div className="mb-5">
+          <WarningCard>
+            {missingPromptLabels.length} prompt{missingPromptLabels.length === 1 ? "" : "s"} never shown during recording — flagged
+            for QC: {missingPromptLabels.join(" · ")}
+          </WarningCard>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <p className="text-xs font-bold uppercase tracking-wide text-field-muted">Original transcript ({rawTranscriptLanguageName})</p>
         <StatusBadge label="Preserved" tone="good" icon={<ShieldCheck className="h-3.5 w-3.5" />} />
@@ -138,10 +157,11 @@ export function TranscriptScreen({
         <div className="mt-5">
           <Disclosure label={`Prompt markers (${promptMarkers.length})`}>
             <div className="space-y-2">
-              {promptMarkers.map((marker, index) => (
-                <div key={`${marker.stepId}-${marker.timestamp}-${index}`} className="flex items-start gap-2 text-sm opacity-80">
+              {promptMarkers.map((marker) => (
+                <div key={marker.id} className="flex items-start gap-2 text-sm opacity-80">
                   <ListChecks className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-60" />
                   <span className="tabular-nums opacity-60">{formatClock(marker.timestamp)}</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-wide opacity-50">{NAVIGATION_ACTION_LABELS[marker.navigationAction]}</span>
                   <span>{marker.promptText}</span>
                 </div>
               ))}

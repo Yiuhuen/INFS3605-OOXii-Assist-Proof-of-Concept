@@ -60,7 +60,8 @@ export function evaluateNeedsQc({
   missingFieldsCount,
   transcriptCaptured,
   manualFallbackUsed,
-  hasUnclearSegments = false
+  hasUnclearSegments = false,
+  hasUnvisitedPrompts = false
 }: {
   recordingStatus: RecordingStatus;
   editedByUser: boolean;
@@ -69,6 +70,8 @@ export function evaluateNeedsQc({
   transcriptCaptured: boolean;
   manualFallbackUsed: boolean;
   hasUnclearSegments?: boolean;
+  /** True when the tester finished/saved without the swipe-card ever showing one or more of the fixed clinical prompts — the sequence itself is never skipped, but a QC reviewer should confirm the gap. */
+  hasUnvisitedPrompts?: boolean;
 }): boolean {
   return (
     recordingStatus !== "recorded" ||
@@ -77,7 +80,8 @@ export function evaluateNeedsQc({
     missingFieldsCount > 0 ||
     (recordingStatus === "recorded" && !transcriptCaptured) ||
     manualFallbackUsed ||
-    hasUnclearSegments
+    hasUnclearSegments ||
+    hasUnvisitedPrompts
   );
 }
 
@@ -171,6 +175,7 @@ export function recordNeedsQc(record: TestRecord) {
     hasMissingFields(record) ||
     recordingIncomplete(record) ||
     hasUnclearSegments(record) ||
+    record.has_unvisited_prompts ||
     record.qc_status === "Unreviewed" ||
     record.sync_status === "Pending sync" ||
     record.sync_status === "Failed"
@@ -185,6 +190,7 @@ export function qcReasons(record: TestRecord): string[] {
   if (hasMissingFields(record)) reasons.push("Missing fields");
   if (record.edited_by_user) reasons.push("Edited by tester");
   if (hasUnclearSegments(record)) reasons.push(`${record.unclear_segments.length} unclear section${record.unclear_segments.length === 1 ? "" : "s"}`);
+  if (record.has_unvisited_prompts) reasons.push("Prompt(s) not shown");
   if (record.sync_status === "Pending sync") reasons.push("Pending sync");
   if (record.sync_status === "Failed") reasons.push("Sync failed");
   if (record.qc_status === "Unreviewed") reasons.push("Unreviewed");

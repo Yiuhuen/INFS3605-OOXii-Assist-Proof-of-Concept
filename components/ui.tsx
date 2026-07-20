@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import type { ButtonHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
-import { ChevronDown, Globe, Wifi, WifiOff } from "lucide-react";
+import { ChevronDown, ChevronRight, Globe, Wifi, WifiOff } from "lucide-react";
+import type { WorkflowStepId } from "@/lib/workflow";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   icon?: ReactNode;
@@ -281,5 +282,84 @@ export function EmptyState({ title, detail }: { title: string; detail?: string }
       <p className="font-bold">{title}</p>
       {detail && <p className="mt-1 text-sm opacity-70">{detail}</p>}
     </div>
+  );
+}
+
+const WORKFLOW_STEP_LABELS: Array<{ id: WorkflowStepId; label: string }> = [
+  { id: "setup", label: "Setup" },
+  { id: "client", label: "Client" },
+  { id: "record", label: "Record" },
+  { id: "review", label: "Review" },
+  { id: "save", label: "Save" }
+];
+
+/** Compact linear progress row (dots + labels) — Setup → Client → Record → Review → Save. No cards, just small markers so the workflow reads as one path. */
+export function WorkflowProgressRow({ currentStep }: { currentStep: WorkflowStepId }) {
+  const currentIndex = WORKFLOW_STEP_LABELS.findIndex((step) => step.id === currentStep);
+  return (
+    <div className="flex items-center">
+      {WORKFLOW_STEP_LABELS.map((step, index) => {
+        const isDone = index < currentIndex;
+        const isCurrent = index === currentIndex;
+        return (
+          <div key={step.id} className={`flex items-center ${index === WORKFLOW_STEP_LABELS.length - 1 ? "" : "flex-1"}`}>
+            <div className="flex flex-col items-center gap-1">
+              <span
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                  isDone
+                    ? "bg-[var(--good)] text-[var(--gold-ink)]"
+                    : isCurrent
+                      ? "bg-[var(--gold)] text-[var(--gold-ink)]"
+                      : "border border-field-line bg-field-card text-field-muted"
+                }`}
+              >
+                {isDone ? "✓" : ""}
+              </span>
+              <span className={`text-[10px] font-semibold uppercase tracking-wide ${isCurrent ? "text-[var(--gold)]" : "text-field-muted"}`}>
+                {step.label}
+              </span>
+            </div>
+            {index < WORKFLOW_STEP_LABELS.length - 1 && (
+              <div className={`mx-1 mb-4 h-px flex-1 ${isDone ? "bg-[var(--good)]" : "bg-field-line"}`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Full-width compact list row for secondary screens (e.g. the More screen) — icon, label, optional badge/detail, chevron. Deliberately not a grid of cards. */
+export function ListRow({
+  icon,
+  label,
+  detail,
+  badge,
+  onClick
+}: {
+  icon: ReactNode;
+  label: string;
+  detail?: string;
+  badge?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded-xl border border-field-line bg-field-card px-4 py-3.5 text-left transition hover:bg-field-surface"
+    >
+      <span className="text-field-muted">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-bold leading-snug">{label}</span>
+        {detail && <span className="block text-xs opacity-60">{detail}</span>}
+      </span>
+      {Boolean(badge) && (
+        <span className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-bold text-white" style={{ background: "var(--record)" }}>
+          {badge}
+        </span>
+      )}
+      <ChevronRight className="h-4 w-4 shrink-0 text-field-muted" />
+    </button>
   );
 }

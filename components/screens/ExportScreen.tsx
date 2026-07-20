@@ -45,9 +45,9 @@ const AUDIT_FIELD_GROUPS: Array<{ title: string; fields: readonly string[] }> = 
   },
   {
     title: "QC and confidence fields",
-    fields: ["confidence_score", "missing_fields", "edited_by_user", "requires_qc_verification", "unclear_segments"]
+    fields: ["confidence_score", "missing_fields", "edited_by_user", "requires_qc_verification", "unclear_segments", "has_unvisited_prompts"]
   },
-  { title: "Recording fields", fields: ["recording_status", "manual_override_reason"] },
+  { title: "Recording fields", fields: ["recording_status", "manual_override_reason", "prompt_markers"] },
   { title: "Sync and timestamp fields", fields: ["processing_status", "sync_attempts", "created_at", "updated_at"] }
 ];
 

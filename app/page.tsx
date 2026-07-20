@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoginScreen } from "@/components/screens/LoginScreen";
 import { Dashboard } from "@/components/screens/Dashboard";
+import { MoreScreen } from "@/components/screens/MoreScreen";
 import { LanguageScreen } from "@/components/screens/LanguageScreen";
 import { TrainingScreen } from "@/components/screens/TrainingScreen";
 import { ClientScreen } from "@/components/screens/ClientScreen";
@@ -17,9 +18,10 @@ import { AdminScreen } from "@/components/screens/AdminScreen";
 import { SettingsScreen } from "@/components/screens/SettingsScreen";
 import { recordsToLonglistCsv, recordsToAuditCsv, downloadCsv } from "@/lib/csv";
 import { getFallbackPack } from "@/lib/languagePacks";
-import { generateClientId, generateRecordId, generateSegmentId } from "@/lib/ids";
+import { generateClientId, generateMarkerId, generateRecordId, generateSegmentId } from "@/lib/ids";
 import { mockExtractFields } from "@/lib/mockAi";
-import { computeProcessingStatus, evaluateNeedsQc } from "@/lib/qc";
+import { computeProcessingStatus, evaluateNeedsQc, recordNeedsQc } from "@/lib/qc";
+import { getNextAction, type WorkflowState } from "@/lib/workflow";
 import { getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
 import { loadAuthMode, saveAuthMode, type AuthMode } from "@/lib/auth";
 import { applyDisplaySettings, loadDisplaySettings, saveDisplaySettings, type DisplaySettings } from "@/lib/settings";
@@ -68,6 +70,7 @@ import {
 type Screen =
   | "login"
   | "dashboard"
+  | "more"
   | "language"
   | "training"
   | "client"
@@ -312,12 +315,12 @@ export default function Home() {
   }, [activePack.code, currentStep, languagePacks]);
 
   const recordingStatus: RecordingStatus = micError ? "failed" : audioBlob ? "recorded" : overrideReason.trim() ? "manual_override" : "not_recorded";
-  const isLastRecordingStep = currentStepIndex === activePack.prompts_json.length - 1;
-  // Same gate on the last step as any other: an active recording (still in
-  // progress) is enough to proceed. "Finish & review" itself stops the
-  // recording — the tester should never have to tap Stop first just to
-  // unlock the button (see finishRecordingAndReview).
-  const canProceedRecording =
+  // Gates only "Finish & review transcript" — prompt navigation (swipe/
+  // Prev/Next/arrow keys) is always available regardless of recording state,
+  // so the tester can browse the card sequence freely. An active recording
+  // (still in progress) is enough to finish; the tester never has to tap
+  // Stop first just to unlock the button (see finishRecordingAndReview).
+  const canFinishRecording =
     recording ||
     paused ||
     recordingStatus === "recorded" ||
@@ -327,6 +330,16 @@ export default function Home() {
   // Pre-save processing-status previews (no TestRecord/sync_status exists yet at this point).
   const transcriptCapturedPreview = transcriptSegments.some((segment) => segment.isFinal && segment.text.trim());
   const manualFallbackUsedPreview = recordingStatus !== "recorded" ? Boolean(overrideReason.trim()) : !transcriptCapturedPreview && Boolean(overrideReason.trim());
+  // The swipe card never reorders or skips the fixed clinical sequence — this
+  // only tracks which of those steps were actually shown while a capture
+  // session was active, so an incomplete pass through the cards still gets
+  // flagged for QC instead of silently passing.
+  const visitedStepIds = useMemo(() => new Set(promptMarkers.map((marker) => marker.stepId)), [promptMarkers]);
+  const missingPromptSteps = useMemo(
+    () => activePack.prompts_json.filter((step) => !visitedStepIds.has(step.id)),
+    [activePack, visitedStepIds]
+  );
+  const hasUnvisitedPromptsPreview = missingPromptSteps.length > 0;
   const transcriptNeedsQc = evaluateNeedsQc({
     recordingStatus,
     editedByUser: false,
@@ -334,7 +347,8 @@ export default function Home() {
     missingFieldsCount: 0,
     transcriptCaptured: transcriptCapturedPreview,
     manualFallbackUsed: manualFallbackUsedPreview,
-    hasUnclearSegments: unclearSegments.length > 0
+    hasUnclearSegments: unclearSegments.length > 0,
+    hasUnvisitedPrompts: hasUnvisitedPromptsPreview
   });
   const transcriptProcessingStatus: ProcessingStatus = computeProcessingStatus({
     transcriptCaptured: transcriptCapturedPreview,
@@ -351,7 +365,8 @@ export default function Home() {
         missingFieldsCount: fieldsEffective.missing_fields.length,
         transcriptCaptured: transcriptCapturedPreview,
         manualFallbackUsed: manualFallbackUsedPreview,
-        hasUnclearSegments: unclearSegments.length > 0
+        hasUnclearSegments: unclearSegments.length > 0,
+        hasUnvisitedPrompts: hasUnvisitedPromptsPreview
       })
     : false;
   const fieldsProcessingStatus: ProcessingStatus = computeProcessingStatus({
@@ -359,6 +374,27 @@ export default function Home() {
     needsQc: fieldsNeedsQc,
     qcApproved: false,
     synced: false
+  });
+
+  const recordsNeedingQc = records.filter(recordNeedsQc).length;
+  const recordsPendingSync = records.filter((record) => record.sync_status === "Pending sync").length;
+
+  // "recorded but not yet finished/reviewed" (tapped Stop without Finish &
+  // review) still counts as in-progress — it sends the tester back into the
+  // recording screen rather than announcing a brand-new recording.
+  const recordingStage: WorkflowState["recordingStage"] =
+    recording || paused ? "in_progress" : rawTranscript.trim() ? "finished" : recordingStartedAt ? "in_progress" : "not_started";
+
+  const nextAction = getNextAction({
+    testerSetupComplete: tester.setup_completed,
+    languagePackReady: Boolean(tester.preferred_language) && (activePack.downloaded || isOnline),
+    trainingComplete: !tester.is_new_tester,
+    hasActiveClient: hasDraftClient,
+    recordingStage,
+    transcriptReviewed: extracted !== null,
+    recordsNeedingQc,
+    recordsPendingSync,
+    totalRecords: records.length
   });
 
   function updateTester(next: Tester) {
@@ -484,10 +520,19 @@ export default function Home() {
     }
   }
 
-  function addPromptMarker(step: PromptStep) {
+  function addPromptMarker(step: PromptStep, stepIndexValue: number, navigationAction: PromptMarker["navigationAction"]) {
     setPromptMarkers((prev) => [
       ...prev,
-      { stepId: step.id, timestamp: new Date().toISOString(), promptText: step.client_prompt, language: activePack.code }
+      {
+        id: generateMarkerId(),
+        stepId: step.id,
+        stepIndex: stepIndexValue,
+        timestamp: Date.now(),
+        promptText: step.client_prompt,
+        language: activePack.code,
+        navigationAction,
+        createdAt: new Date().toISOString()
+      }
     ]);
   }
 
@@ -633,7 +678,7 @@ export default function Home() {
       setMicError(false);
       setRecordingStartedAt((prev) => prev || new Date().toISOString());
       startElapsedTimer();
-      addPromptMarker(currentStep);
+      addPromptMarker(currentStep, currentStepIndex, "start");
       startLiveTranscript();
     } catch {
       const timestamp = new Date().toISOString();
@@ -645,7 +690,7 @@ export default function Home() {
       setMicError(true);
       setRecording(false);
       setShowOverrideInput(true);
-      addPromptMarker(currentStep);
+      addPromptMarker(currentStep, currentStepIndex, "start");
     }
   }
 
@@ -720,6 +765,7 @@ export default function Home() {
     const recordingHappened = Boolean(recordingStartedAt) && !micError;
 
     if (recording || paused) {
+      addPromptMarker(currentStep, currentStepIndex, "finish");
       mediaRecorderRef.current?.stop();
       setRecording(false);
       setPaused(false);
@@ -769,16 +815,29 @@ export default function Home() {
     setCorrectedTranscript(english);
   }
 
-  function goToNextStep() {
-    if (!canProceedRecording) return;
-    if (currentStepIndex === activePack.prompts_json.length - 1) {
-      finishRecordingAndReview();
-    } else {
-      const nextIndex = currentStepIndex + 1;
-      const nextStep = activePack.prompts_json[nextIndex];
-      if (recording || paused) addPromptMarker(nextStep);
-      setCurrentStepIndex(nextIndex);
-    }
+  /**
+   * Swipe-card navigation — moves the visible prompt only. Recording,
+   * transcript segments, and the timer are untouched; the only side effect
+   * is a timestamped marker (when a capture session is active) and updating
+   * currentStepIdRef synchronously so the very next transcript segment is
+   * attributed to the step the tester is now looking at, not the one they
+   * left. Bounds are re-checked here too (not just in the UI) so this stays
+   * safe to call directly.
+   */
+  function goToPromptIndex(targetIndex: number, navigationAction: "next" | "previous") {
+    if (targetIndex < 0 || targetIndex >= activePack.prompts_json.length) return;
+    const targetStep = activePack.prompts_json[targetIndex];
+    if (recording || paused) addPromptMarker(targetStep, targetIndex, navigationAction);
+    currentStepIdRef.current = targetStep.id;
+    setCurrentStepIndex(targetIndex);
+  }
+
+  function goToNextPrompt() {
+    goToPromptIndex(currentStepIndex + 1, "next");
+  }
+
+  function goToPreviousPrompt() {
+    goToPromptIndex(currentStepIndex - 1, "previous");
   }
 
   function runExtraction() {
@@ -885,7 +944,8 @@ export default function Home() {
       missingFieldsCount: effective.missing_fields.length,
       transcriptCaptured,
       manualFallbackUsed: manualFallbackUsedPreview,
-      hasUnclearSegments: unclearSegments.length > 0
+      hasUnclearSegments: unclearSegments.length > 0,
+      hasUnvisitedPrompts: hasUnvisitedPromptsPreview
     });
 
     let audioLocalUrl: string;
@@ -926,6 +986,7 @@ export default function Home() {
       english_processing_transcript: englishProcessingTranscript,
       transcript_segments: transcriptSegments,
       prompt_markers: promptMarkers,
+      has_unvisited_prompts: hasUnvisitedPromptsPreview,
       unclear_segments: unclearSegments,
       corrected_transcript_text: correctedTranscript,
       extracted_json: extracted,
@@ -1068,6 +1129,19 @@ export default function Home() {
     action();
   }
 
+  /**
+   * Drives Home's single primary CTA. The target screen always comes from
+   * getNextAction (lib/workflow.ts), which already accounts for training/
+   * language readiness — no extra guard is needed here, just the resetTest()
+   * side effect that starting a fresh client requires.
+   */
+  function goToNextAction() {
+    if (nextAction.targetScreen === "client") {
+      resetTest();
+    }
+    setScreen(nextAction.targetScreen);
+  }
+
   function navigateToInsightTarget(target: InsightTargetPage) {
     if (target === "QC") setScreen("qc");
     else if (target === "Export") setScreen("export");
@@ -1101,35 +1175,30 @@ export default function Home() {
       {isAuthenticated && screen === "dashboard" && (
         <Dashboard
           tester={tester}
-          records={records}
           activePack={activePack}
           isOnline={isOnline}
           displaySettings={displaySettings}
-          hasDraftClient={hasDraftClient}
-          onStartRecording={() =>
-            requireTrainingThen(() => {
-              if (hasDraftClient) setScreen("recording");
-              else {
-                resetTest();
-                setScreen("client");
-              }
-            })
-          }
-          onNewClient={() =>
-            requireTrainingThen(() => {
-              resetTest();
-              setScreen("client");
-            })
-          }
-          onQc={() => setScreen("qc")}
-          onExport={() => setScreen("export")}
-          onInsights={() => setScreen("insights")}
-          onInsightNavigate={navigateToInsightTarget}
-          onLanguage={() => setScreen("language")}
-          onSettings={() => setScreen("settings")}
-          onAdmin={() => setScreen("admin")}
-          onTraining={() => setScreen("training")}
+          nextAction={nextAction}
+          recordsNeedingQc={recordsNeedingQc}
+          recordsPendingSync={recordsPendingSync}
+          onNextAction={goToNextAction}
+          onMore={() => setScreen("more")}
           onLogout={handleLogout}
+        />
+      )}
+
+      {isAuthenticated && screen === "more" && (
+        <MoreScreen
+          isOnline={isOnline}
+          recordsNeedingQc={recordsNeedingQc}
+          onLanguage={() => setScreen("language")}
+          onDisplaySettings={() => setScreen("settings")}
+          onReplayTraining={() => setScreen("training")}
+          onQc={() => setScreen("qc")}
+          onInsights={() => setScreen("insights")}
+          onExport={() => setScreen("export")}
+          onAdmin={() => setScreen("admin")}
+          onBack={() => setScreen("dashboard")}
         />
       )}
 
@@ -1182,7 +1251,6 @@ export default function Home() {
           recording={recording}
           paused={paused}
           elapsedSeconds={elapsedSeconds}
-          audioUrl={audioUrl}
           micError={micError}
           overrideReason={overrideReason}
           setOverrideReason={setOverrideReason}
@@ -1191,7 +1259,7 @@ export default function Home() {
           recordingStatus={recordingStatus}
           isOnline={isOnline}
           nudgeVisible={nudgeVisible}
-          canProceed={canProceedRecording}
+          canFinish={canFinishRecording}
           transcriptSegments={transcriptSegments}
           interimText={interimText}
           transcriptUnavailable={transcriptUnavailable}
@@ -1214,7 +1282,9 @@ export default function Home() {
           resumeRecording={resumeRecording}
           stopRecording={stopRecording}
           onBack={currentStepIndex === 0 ? () => setScreen("client") : undefined}
-          onNext={goToNextStep}
+          onNextPrompt={goToNextPrompt}
+          onPreviousPrompt={goToPreviousPrompt}
+          onFinish={finishRecordingAndReview}
         />
       )}
 
@@ -1233,6 +1303,7 @@ export default function Home() {
           recordingDurationSeconds={elapsedSeconds}
           unclearSegments={unclearSegments}
           promptMarkers={promptMarkers}
+          missingPromptLabels={missingPromptSteps.map((step) => step.client_prompt)}
           isOnline={isOnline}
           canGenerateDraft={!transcriptCapturedPreview && Boolean(recordingStartedAt) && !micError}
           onGenerateDraft={regenerateTranscriptDraft}
