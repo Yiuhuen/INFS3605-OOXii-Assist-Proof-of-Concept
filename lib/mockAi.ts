@@ -44,10 +44,24 @@ function extractEyeLines(transcript: string): { right: string; left: string } {
  * intentionally simple/keyword-based rather than a real model, so results
  * always need a human to confirm via the QC review step before export.
  */
+/**
+ * "Does the client currently own glasses?" — distinct from glasses_selected
+ * (which trial lens was dispensed during this test). Keyword-only, never a
+ * guess: returns "" when the transcript gives no clear signal either way.
+ */
+function extractCurrentGlasses(lower: string): string {
+  const deniesGlasses = /\bno\b[^.\n]*\bglasses\b|don't have glasses|do not have glasses|no glasses|not currently|no current glasses/.test(lower);
+  if (deniesGlasses) return "no";
+  const confirmsGlasses = /currently have glasses|already have glasses|wearing glasses|yes[^.\n]*glasses/.test(lower);
+  if (confirmsGlasses) return "yes";
+  return "";
+}
+
 export function mockExtractFields(transcript: string): ExtractedFields {
   const lower = transcript.toLowerCase();
   const { right, left } = extractEyeLines(transcript);
   const cataract = lower.includes("not had cataract") || lower.includes("no cataract") ? "no" : lower.includes("cataract") ? "mentioned - needs QC" : "";
+  const currentGlasses = extractCurrentGlasses(lower);
   const glasses = lower.includes("no.") || lower.includes("no glasses") ? "no current glasses" : lower.includes("glasses") ? "mentioned" : "";
   const comfort = lower.includes("clearer") ? "Client reported clearer vision; left eye slightly blurry." : "";
   const selected = lower.includes("blue") || lower.includes("white") ? "Right/left lenses mentioned for QC review" : glasses;
@@ -55,6 +69,7 @@ export function mockExtractFields(transcript: string): ExtractedFields {
   const extracted: ExtractedFields = {
     comfort_response: comfort,
     cataract_history_confirmed: cataract,
+    current_glasses: currentGlasses,
     right_eye_distance_result: right,
     left_eye_distance_result: left,
     final_readable_line: right || left ? [right, left].filter(Boolean).join("; ") : "",

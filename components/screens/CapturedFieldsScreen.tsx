@@ -13,6 +13,7 @@ const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confi
   glasses_selected: "Glasses selected",
   comfort_response: "Comfort response",
   cataract_history_confirmed: "Cataract history confirmed",
+  current_glasses: "Current glasses",
   additional_notes: "Additional notes"
 };
 

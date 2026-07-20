@@ -14,6 +14,7 @@ export function QcScreen({
   isOnline,
   loadQcAudio,
   updateRecord,
+  updateNotes,
   markComplete,
   onBack
 }: {
@@ -23,6 +24,7 @@ export function QcScreen({
   isOnline: boolean;
   loadQcAudio: (record: TestRecord) => void;
   updateRecord: (record: TestRecord, patch: Partial<ExtractedFields>) => void;
+  updateNotes: (record: TestRecord, notes: string) => void;
   markComplete: (record: TestRecord) => void;
   onBack: () => void;
 }) {
@@ -47,7 +49,7 @@ export function QcScreen({
   }, [selected?.id]);
 
   const effective = selected ? selected.edited_extracted_json ?? selected.extracted_json : null;
-  const transcriptDiffers = selected
+  const correctedTranscriptDiffers = selected
     ? selected.corrected_transcript_text.trim().length > 0 && selected.corrected_transcript_text.trim() !== selected.raw_transcript_text.trim()
     : false;
 
@@ -113,10 +115,20 @@ export function QcScreen({
         <div className="field-card space-y-5">
           <div className="flex flex-wrap gap-2">
             <StatusBadge label={processingStatusLabel(selected.processing_status)} tone={processingStatusTone(selected.processing_status)} />
+            <StatusBadge
+              label={`${Math.round(selected.confidence_score * 100)}% confidence`}
+              tone={selected.confidence_score < 0.7 ? "warn" : "good"}
+            />
             {qcReasons(selected).map((reason) => (
               <StatusBadge key={reason} label={reason} tone="warn" />
             ))}
           </div>
+
+          {selected.manual_override_reason.trim() && (
+            <div className="rounded-2xl border border-field-line bg-field-surface p-3 text-sm">
+              <span className="font-bold">Manual override reason:</span> {selected.manual_override_reason.trim()}
+            </div>
+          )}
 
           <div>
             <div className="flex items-center justify-between">
@@ -175,12 +187,15 @@ export function QcScreen({
             </div>
           )}
 
-          {transcriptDiffers && (
-            <div>
-              <p className="field-label">Corrected transcript</p>
-              <pre className="ink-panel max-h-48 overflow-auto whitespace-pre-wrap text-sm opacity-90">{selected.corrected_transcript_text}</pre>
+          <div>
+            <div className="flex items-center justify-between">
+              <p className="field-label mb-0">Corrected transcript</p>
+              {!correctedTranscriptDiffers && <StatusBadge label="Same as processing copy" tone="neutral" />}
             </div>
-          )}
+            <pre className="ink-panel mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-sm opacity-90">
+              {selected.corrected_transcript_text || "No corrected transcript recorded."}
+            </pre>
+          </div>
 
           <div>
             <p className="field-label">Review captured fields</p>
@@ -202,6 +217,16 @@ export function QcScreen({
                   );
                 })}
             </div>
+          </div>
+
+          <div>
+            <TextAreaField
+              label="QC notes"
+              value={selected.qc_notes}
+              onChange={(event) => updateNotes(selected, event.target.value)}
+              placeholder="Optional — notes for other reviewers about this record's QC decision"
+              rows={2}
+            />
           </div>
 
           {selected.qc_status !== "Approved" ? (

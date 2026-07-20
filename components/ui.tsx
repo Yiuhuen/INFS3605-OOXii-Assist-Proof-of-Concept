@@ -91,8 +91,9 @@ export function OfflineBadge({ isOnline }: { isOnline: boolean }) {
   );
 }
 
-export function MetricCard({ value, label, tone = "neutral" }: { value: string | number; label: string; tone?: "neutral" | "gold" | "danger" }) {
-  const valueClass = tone === "gold" ? "text-[var(--gold)]" : tone === "danger" ? "text-[var(--danger)]" : "text-white";
+export function MetricCard({ value, label, tone = "neutral" }: { value: string | number; label: string; tone?: "neutral" | "gold" | "danger" | "good" }) {
+  const valueClass =
+    tone === "gold" ? "text-[var(--gold)]" : tone === "danger" ? "text-[var(--danger)]" : tone === "good" ? "text-[var(--good)]" : "text-white";
   return (
     <div className="rounded-2xl border border-field-line bg-field-card px-3 py-4 text-center">
       <p className={`text-2xl font-black ${valueClass}`}>{value}</p>

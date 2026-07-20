@@ -46,14 +46,16 @@ npm run dev
 
 Open the local URL shown in the terminal.
 
-## Login and demo mode
+## Tester setup / Quick start (not a client login)
 
-The login screen supports two paths:
+The first screen is **tester setup**, not a client-facing login — OOXii clients never authenticate anywhere in this app; they only ever get an anonymous generated ID (see Privacy below). Two paths:
 
-- **Use demo tester** — always works, with or without Supabase configured. This is the safe fallback for the Week 7 demo and for markers who do not have Supabase credentials.
-- **Email / password** — only active when Supabase environment variables are present. If they are missing, the app shows a **"Demo mode active"** note and disables the email fields instead of crashing.
+- **Continue as demo tester** (primary) — always works, offline, with no password, with or without Supabase configured. This is the default path for the Week 7 demo and for markers who do not have Supabase credentials. It creates/loads a tester profile (id, role, experience level, home base, preferred language, instruction mode, `setup_completed`, `last_active_at`) and saves it to this device via `localStorage` (see `lib/storage.ts`), so the tester stays "signed in" locally and never sees the setup screen again on this device unless they log out.
+- **Use email login instead** (secondary, collapsed) — only shown when Supabase environment variables are present. If they are missing, this option doesn't render at all rather than showing disabled fields.
 
-Logging out clears the session (and calls `supabase.auth.signOut()` when a Supabase session is active) and returns to the login screen. All screens other than login require an active session (demo or Supabase) — the app redirects back to login if neither is present.
+Once set up, the tester profile is editable any time from **Settings → Tester profile** (role, experience level, home base, instruction mode, preferred language). Logging out clears the local session only — the tester profile itself stays saved on the device and is reused the next time "Continue as demo tester" is tapped, so testers are never forced through setup twice on the same phone.
+
+**Production-ready note:** the offline field workflow (record → review → QC → export) never depends on live authentication — it works identically whether the tester is in demo mode or signed in via Supabase, online or offline. In production, this demo-tester path would be replaced with real Supabase-backed tester accounts (see `lib/supabase.ts`), without changing anything about how a test is captured or exported.
 
 ## Supabase setup
 
@@ -73,7 +75,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 
 7. Restart the dev server.
 
-With these set, the login screen's email/password fields become active and `test_records` sync to Supabase whenever the app is online.
+With these set, the "Use email login instead" option appears on the Tester setup screen and `test_records` sync to Supabase whenever the app is online.
 
 ## Offline-first behaviour
 

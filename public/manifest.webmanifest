@@ -1,10 +1,17 @@
 {
   "name": "OOXii Assist",
-  "short_name": "OOXii Assist",
+  "short_name": "OOXii",
   "description": "Offline-first multilingual guided testing companion for OOXii lay testers.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#150c1f",
   "theme_color": "#150c1f",
-  "icons": []
+  "icons": [
+    {
+      "src": "/brand/ooxii-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }

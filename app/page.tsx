@@ -12,12 +12,13 @@ import { CapturedFieldsScreen } from "@/components/screens/CapturedFieldsScreen"
 import { SavedScreen } from "@/components/screens/SavedScreen";
 import { QcScreen } from "@/components/screens/QcScreen";
 import { ExportScreen } from "@/components/screens/ExportScreen";
+import { InsightsScreen } from "@/components/screens/InsightsScreen";
 import { AdminScreen } from "@/components/screens/AdminScreen";
 import { SettingsScreen } from "@/components/screens/SettingsScreen";
 import { recordsToLonglistCsv, recordsToAuditCsv, downloadCsv } from "@/lib/csv";
 import { getFallbackPack } from "@/lib/languagePacks";
 import { generateClientId, generateRecordId, generateSegmentId } from "@/lib/ids";
-import { demoTranscript, mockExtractFields } from "@/lib/mockAi";
+import { mockExtractFields } from "@/lib/mockAi";
 import { computeProcessingStatus, evaluateNeedsQc } from "@/lib/qc";
 import { getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
 import { loadAuthMode, saveAuthMode, type AuthMode } from "@/lib/auth";
@@ -29,6 +30,7 @@ import {
   mockTranslateToEnglish,
   type LiveTranscriptController
 } from "@/lib/liveTranscript";
+import type { InsightTargetPage } from "@/lib/insights";
 import {
   clearRecords,
   demoTester,
@@ -43,6 +45,7 @@ import { isSupabaseConfigured, supabase, syncRecordToSupabase } from "@/lib/supa
 import {
   createEmptyManualFields,
   REQUIRED_EXTRACTED_FIELDS,
+  UNKNOWN_FIELD_VALUE,
   type ClientRecord,
   type ConnectionMode,
   type ExtractedFields,
@@ -72,6 +75,7 @@ type Screen =
   | "saved"
   | "qc"
   | "export"
+  | "insights"
   | "admin"
   | "settings";
 
@@ -86,10 +90,25 @@ const blankClient = (): ClientRecord => ({
   created_at: new Date().toISOString()
 });
 
+/**
+ * Never leaves a required/populate field blank in storage — a field the local
+ * extraction (or manual entry) could not determine is written as the literal
+ * "UNKNOWN" rather than an empty string, and still counts as missing for QC
+ * and confidence purposes. Never a guess: only fills in what was truly absent.
+ */
 function scoreExtractedFields(fields: ExtractedFields): ExtractedFields {
-  const missing_fields = REQUIRED_EXTRACTED_FIELDS.filter((field) => !String(fields[field] ?? "").trim());
+  const withUnknowns: ExtractedFields = { ...fields };
+  (Object.keys(createEmptyManualFields()) as Array<keyof ManualExtractedFields>).forEach((field) => {
+    if (!String(withUnknowns[field] ?? "").trim()) {
+      withUnknowns[field] = UNKNOWN_FIELD_VALUE;
+    }
+  });
+  const missing_fields = REQUIRED_EXTRACTED_FIELDS.filter((field) => {
+    const value = String(withUnknowns[field] ?? "").trim();
+    return !value || value === UNKNOWN_FIELD_VALUE;
+  });
   const confidence_score = Math.max(0.45, Math.round((1 - missing_fields.length / REQUIRED_EXTRACTED_FIELDS.length) * 100) / 100);
-  return { ...fields, missing_fields, confidence_score };
+  return { ...withUnknowns, missing_fields, confidence_score };
 }
 
 export default function Home() {
@@ -161,17 +180,28 @@ export default function Home() {
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
 
+    // Re-reads storage directly (rather than closing over the `tester` state)
+    // so the "last active" touch below is correct regardless of React's
+    // batching of the setTester call a few lines up in this same effect.
+    function touchTesterActivity() {
+      const restored: Tester = { ...loadTester(), setup_completed: true, last_active_at: new Date().toISOString() };
+      saveTester(restored);
+      setTester(restored);
+    }
+
     if (supabase) {
       supabase.auth.getSession().then(({ data }) => {
         if (data.session) {
           setAuthMode("supabase");
           saveAuthMode("supabase");
+          touchTesterActivity();
         }
       });
       const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
         if (session) {
           setAuthMode("supabase");
           saveAuthMode("supabase");
+          touchTesterActivity();
         }
       });
       return () => {
@@ -182,7 +212,10 @@ export default function Home() {
     }
 
     const storedMode = loadAuthMode();
-    if (storedMode === "demo") setAuthMode("demo");
+    if (storedMode === "demo") {
+      setAuthMode("demo");
+      touchTesterActivity();
+    }
 
     return () => {
       window.removeEventListener("online", goOnline);
@@ -335,7 +368,7 @@ export default function Home() {
     setAuthMode("demo");
     saveAuthMode("demo");
     setAuthError("");
-    const next = { ...tester, id: tester.id || demoTester.id };
+    const next: Tester = { ...tester, id: tester.id || demoTester.id, setup_completed: true, last_active_at: new Date().toISOString() };
     updateTester(next);
     setScreen(next.preferred_language ? (next.is_new_tester ? "language" : "dashboard") : "language");
   }
@@ -350,6 +383,7 @@ export default function Home() {
       setAuthError(error.message);
       return;
     }
+    updateTester({ ...tester, setup_completed: true, last_active_at: new Date().toISOString() });
     setScreen(tester.preferred_language ? (tester.is_new_tester ? "language" : "dashboard") : "language");
   }
 
@@ -537,7 +571,11 @@ export default function Home() {
         .map((segment) => segment.text)
         .join("\n");
     }
-    if (recordingStatus === "recorded") return demoTranscript;
+    if (recordingStatus === "recorded") {
+      const parts = ["Audio recorded, but no live transcript segments were captured. Review the audio directly during QC."];
+      if (manualFields.additional_notes.trim()) parts.push(`Manual notes: ${manualFields.additional_notes.trim()}`);
+      return parts.join(" ");
+    }
     const parts = [`Recording not available (${recordingStatus.replace("_", " ")}).`];
     if (overrideReason.trim()) parts.push(`Tester override reason: ${overrideReason.trim()}`);
     if (manualFields.additional_notes.trim()) parts.push(`Manual notes: ${manualFields.additional_notes.trim()}`);
@@ -582,6 +620,7 @@ export default function Home() {
       glasses_selected: aiResult.glasses_selected || manualFields.glasses_selected,
       comfort_response: aiResult.comfort_response || manualFields.comfort_response,
       cataract_history_confirmed: aiResult.cataract_history_confirmed || manualFields.cataract_history_confirmed,
+      current_glasses: aiResult.current_glasses || manualFields.current_glasses,
       additional_notes: aiResult.additional_notes || manualFields.additional_notes
     });
     setExtracted(merged);
@@ -620,6 +659,7 @@ export default function Home() {
           qcApproved: pendingRecord.qc_status === "Approved",
           synced: true
         }),
+        sync_attempts: pendingRecord.sync_attempts + 1,
         updated_at: updatedAt
       };
       const syncResult = await syncRecordToSupabase(syncedRecord);
@@ -629,6 +669,7 @@ export default function Home() {
             ...pendingRecord,
             sync_status: "Failed",
             connection_status: "online",
+            sync_attempts: pendingRecord.sync_attempts + 1,
             updated_at: updatedAt
           };
 
@@ -692,8 +733,10 @@ export default function Home() {
     const initialSyncStatus = isOnline ? (isSupabaseConfigured ? "Pending sync" : "Synced") : "Pending sync";
     const record: TestRecord = {
       id,
+      session_id: id,
       client_id: client.id,
       tester_id: tester.id,
+      deployment_site: client.location_site,
       language: activePack.code,
       status: needsQc ? "Needs QC" : "Complete",
       sync_status: initialSyncStatus,
@@ -720,12 +763,14 @@ export default function Home() {
       missing_fields: effective.missing_fields,
       qc_status: needsQc ? "Unreviewed" : "Approved",
       needs_qc: needsQc,
+      qc_notes: "",
       processing_status: computeProcessingStatus({
         transcriptCaptured,
         needsQc,
         qcApproved: !needsQc,
         synced: initialSyncStatus === "Synced"
       }),
+      sync_attempts: 0,
       client_snapshot: client,
       created_at: now,
       updated_at: now
@@ -740,6 +785,7 @@ export default function Home() {
         sync_status: "Synced",
         connection_status: "online",
         processing_status: computeProcessingStatus({ transcriptCaptured, needsQc, qcApproved: !needsQc, synced: true }),
+        sync_attempts: record.sync_attempts + 1,
         updated_at: new Date().toISOString()
       };
       const syncResult = await syncRecordToSupabase(syncedRecord);
@@ -749,6 +795,7 @@ export default function Home() {
             ...record,
             sync_status: "Failed",
             connection_status: "online",
+            sync_attempts: record.sync_attempts + 1,
             updated_at: new Date().toISOString()
           };
       saveRecord(savedRecord);
@@ -764,6 +811,7 @@ export default function Home() {
     setRecords(loadRecords());
     setLatestRecord(savedRecord);
     setHasDraftClient(false);
+    updateTester({ ...tester, last_active_at: now });
 
     setScreen("saved");
   }
@@ -784,6 +832,13 @@ export default function Home() {
       processing_status: computeProcessingStatus({ transcriptCaptured, needsQc: true, qcApproved: false, synced: record.sync_status === "Synced" }),
       updated_at: new Date().toISOString()
     };
+    saveRecord(nextRecord);
+    setRecords(loadRecords());
+    setLatestRecord(nextRecord);
+  }
+
+  function updateQcNotes(record: TestRecord, notes: string) {
+    const nextRecord: TestRecord = { ...record, qc_notes: notes, updated_at: new Date().toISOString() };
     saveRecord(nextRecord);
     setRecords(loadRecords());
     setLatestRecord(nextRecord);
@@ -839,6 +894,21 @@ export default function Home() {
     action();
   }
 
+  function navigateToInsightTarget(target: InsightTargetPage) {
+    if (target === "QC") setScreen("qc");
+    else if (target === "Export") setScreen("export");
+    else if (target === "Prompt Editor") setScreen("admin");
+    else {
+      requireTrainingThen(() => {
+        if (hasDraftClient) setScreen("recording");
+        else {
+          resetTest();
+          setScreen("client");
+        }
+      });
+    }
+  }
+
   const isAuthenticated = Boolean(authMode);
 
   return (
@@ -879,6 +949,8 @@ export default function Home() {
           }
           onQc={() => setScreen("qc")}
           onExport={() => setScreen("export")}
+          onInsights={() => setScreen("insights")}
+          onInsightNavigate={navigateToInsightTarget}
           onLanguage={() => setScreen("language")}
           onSettings={() => setScreen("settings")}
           onAdmin={() => setScreen("admin")}
@@ -1016,6 +1088,7 @@ export default function Home() {
           isOnline={isOnline}
           loadQcAudio={loadQcAudio}
           updateRecord={updateQcRecord}
+          updateNotes={updateQcNotes}
           markComplete={markQcComplete}
           onBack={() => setScreen("dashboard")}
         />
@@ -1032,8 +1105,14 @@ export default function Home() {
             setRecords([]);
           }}
           onReviewQc={() => setScreen("qc")}
+          onInsights={() => setScreen("insights")}
+          onInsightNavigate={navigateToInsightTarget}
           onBack={() => setScreen("dashboard")}
         />
+      )}
+
+      {isAuthenticated && screen === "insights" && (
+        <InsightsScreen records={records} isOnline={isOnline} onNavigate={navigateToInsightTarget} onBack={() => setScreen("dashboard")} />
       )}
 
       {isAuthenticated && screen === "admin" && (
@@ -1046,9 +1125,11 @@ export default function Home() {
           onChange={handleDisplaySettingsChange}
           tester={tester}
           onTesterChange={updateTester}
+          languagePacks={languagePacks}
           connectionMode={connectionMode}
           onConnectionModeChange={setConnectionMode}
           isOnline={isOnline}
+          onLanguage={() => setScreen("language")}
           onLogout={handleLogout}
           onBack={() => setScreen("dashboard")}
         />

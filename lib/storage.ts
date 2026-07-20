@@ -1,4 +1,4 @@
-import type { LanguagePack, Tester, TestRecord } from "./types";
+import { createEmptyExtractedFields, type LanguagePack, type Tester, type TestRecord } from "./types";
 import { defaultLanguagePacks } from "./languagePacks";
 import { computeRecordProcessingStatus } from "./qc";
 
@@ -14,7 +14,9 @@ export const demoTester: Tester = {
   home_base: "Site A, Vanuatu",
   preferred_language: "en",
   instruction_mode: "beginner",
-  is_new_tester: true
+  is_new_tester: true,
+  setup_completed: false,
+  last_active_at: ""
 };
 
 function safeParse<T>(value: string | null, fallback: T): T {
@@ -43,8 +45,10 @@ type LegacyTestRecord = Partial<TestRecord> & { transcript_text?: string };
 function normalizeRecord(record: LegacyTestRecord): TestRecord {
   const base: Omit<TestRecord, "processing_status"> = {
     id: record.id ?? "",
+    session_id: record.session_id ?? record.id ?? "",
     client_id: record.client_id ?? "",
     tester_id: record.tester_id ?? "",
+    deployment_site: record.deployment_site ?? record.client_snapshot?.location_site ?? "",
     language: record.language ?? "en",
     status: record.status ?? "Draft",
     sync_status: record.sync_status ?? "Pending sync",
@@ -62,8 +66,8 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     prompt_markers: record.prompt_markers ?? [],
     unclear_segments: record.unclear_segments ?? [],
     corrected_transcript_text: record.corrected_transcript_text ?? "",
-    extracted_json: record.extracted_json ?? { comfort_response: "", cataract_history_confirmed: "", right_eye_distance_result: "", left_eye_distance_result: "", final_readable_line: "", glasses_selected: "", additional_notes: "", missing_fields: [], confidence_score: 0 },
-    edited_extracted_json: record.edited_extracted_json ?? null,
+    extracted_json: { ...createEmptyExtractedFields(), ...record.extracted_json },
+    edited_extracted_json: record.edited_extracted_json ? { ...createEmptyExtractedFields(), ...record.edited_extracted_json } : null,
     extraction_source: record.extraction_source ?? "raw_transcript",
     edited_by_user: record.edited_by_user ?? false,
     requires_qc_verification: record.requires_qc_verification ?? false,
@@ -71,6 +75,8 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     missing_fields: record.missing_fields ?? [],
     qc_status: record.qc_status ?? "Unreviewed",
     needs_qc: record.needs_qc ?? record.qc_status !== "Approved",
+    qc_notes: record.qc_notes ?? "",
+    sync_attempts: record.sync_attempts ?? 0,
     client_snapshot: {
       id: record.client_snapshot?.id ?? "",
       age_band: record.client_snapshot?.age_band ?? "",

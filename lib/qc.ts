@@ -154,6 +154,11 @@ export function hasUnclearSegments(record: TestRecord) {
   return record.unclear_segments.length > 0;
 }
 
+/** True when the record relied on the tester's manual-override fallback rather than a captured recording. */
+export function usedManualOverride(record: TestRecord) {
+  return record.recording_status === "manual_override" || Boolean(record.manual_override_reason.trim());
+}
+
 export function recordNeedsQc(record: TestRecord) {
   // QC sign-off is terminal for data-quality issues, but sync problems remain
   // visible because the demo/export flows need to show pending local records.

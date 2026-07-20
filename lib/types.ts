@@ -27,6 +27,10 @@ export interface Tester {
   preferred_language: LanguageCode;
   instruction_mode: "beginner" | "concise";
   is_new_tester: boolean;
+  /** True once the tester has completed setup (demo or Supabase). Informational — auth persistence itself lives in lib/auth.ts. */
+  setup_completed: boolean;
+  /** ISO timestamp of the tester's most recent setup/login or saved record — shown in Settings for accountability, never used for access control. */
+  last_active_at: string;
 }
 
 export interface ClientRecord {
@@ -43,6 +47,7 @@ export interface ClientRecord {
 export interface ExtractedFields {
   comfort_response: string;
   cataract_history_confirmed: string;
+  current_glasses: string;
   right_eye_distance_result: string;
   left_eye_distance_result: string;
   final_readable_line: string;
@@ -55,10 +60,14 @@ export interface ExtractedFields {
 export const REQUIRED_EXTRACTED_FIELDS: Array<keyof ExtractedFields> = [
   "comfort_response",
   "cataract_history_confirmed",
+  "current_glasses",
   "right_eye_distance_result",
   "left_eye_distance_result",
   "glasses_selected"
 ];
+
+/** Literal value stored for a required/populate field the local extraction (or manual entry) could not determine. Never a guess — see lib/mockAi.ts. */
+export const UNKNOWN_FIELD_VALUE = "UNKNOWN";
 
 export type ManualExtractedFields = Omit<ExtractedFields, "missing_fields" | "confidence_score">;
 
@@ -66,6 +75,7 @@ export function createEmptyManualFields(): ManualExtractedFields {
   return {
     comfort_response: "",
     cataract_history_confirmed: "",
+    current_glasses: "",
     right_eye_distance_result: "",
     left_eye_distance_result: "",
     final_readable_line: "",
@@ -78,6 +88,7 @@ export function createEmptyExtractedFields(): ExtractedFields {
   return {
     comfort_response: "",
     cataract_history_confirmed: "",
+    current_glasses: "",
     right_eye_distance_result: "",
     left_eye_distance_result: "",
     final_readable_line: "",
@@ -90,8 +101,12 @@ export function createEmptyExtractedFields(): ExtractedFields {
 
 export interface TestRecord {
   id: string;
+  /** Same value as id — an explicit alias so a session can be referenced/linked without assuming id doubles as session_id. */
+  session_id: string;
   client_id: string;
   tester_id: string;
+  /** Mirrors client_snapshot.location_site at creation — a top-level convenience field for linking/reporting without unnesting client_snapshot. */
+  deployment_site: string;
   language: LanguageCode;
   status: TestStatus;
   sync_status: SyncStatus;
@@ -130,8 +145,12 @@ export interface TestRecord {
   missing_fields: string[];
   qc_status: QCStatus;
   needs_qc: boolean;
+  /** Free-text notes a QC reviewer leaves on the record (separate from edited field values). */
+  qc_notes: string;
   /** Local-mock processing lifecycle for this record. Never set by a paid API. */
   processing_status: ProcessingStatus;
+  /** Number of times a sync to Supabase has been attempted (success or failure) for this record. */
+  sync_attempts: number;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;

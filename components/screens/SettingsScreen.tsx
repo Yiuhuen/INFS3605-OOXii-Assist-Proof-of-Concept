@@ -1,9 +1,9 @@
 "use client";
 
-import { LogOut } from "lucide-react";
+import { LogOut, ShieldCheck } from "lucide-react";
 import { brightnessLabels, contrastLabels, type Brightness, type ContrastTheme, type DisplaySettings } from "@/lib/settings";
-import type { ConnectionMode, Tester } from "@/lib/types";
-import { DangerButton, FormField, PrimaryButton, PromptCard, SecondaryButton, SelectField } from "@/components/ui";
+import type { ConnectionMode, LanguagePack, Tester } from "@/lib/types";
+import { DangerButton, FormField, InfoCard, PrimaryButton, PromptCard, SecondaryButton, SelectField, StatusBadge } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { isSpeechAvailable } from "@/lib/speech";
 
@@ -24,9 +24,11 @@ export function SettingsScreen({
   onChange,
   tester,
   onTesterChange,
+  languagePacks,
   connectionMode,
   onConnectionModeChange,
   isOnline,
+  onLanguage,
   onLogout,
   onBack
 }: {
@@ -34,12 +36,15 @@ export function SettingsScreen({
   onChange: (settings: DisplaySettings) => void;
   tester: Tester;
   onTesterChange: (tester: Tester) => void;
+  languagePacks: LanguagePack[];
   connectionMode: ConnectionMode;
   onConnectionModeChange: (mode: ConnectionMode) => void;
   isOnline: boolean;
+  onLanguage: () => void;
   onLogout: () => void;
   onBack: () => void;
 }) {
+  const preferredLanguageName = languagePacks.find((pack) => pack.code === tester.preferred_language)?.name ?? tester.preferred_language;
   return (
     <section>
       <ScreenHeader title="Display settings" onBack={onBack} isOnline={isOnline} />
@@ -88,10 +93,49 @@ export function SettingsScreen({
       </PrimaryButton>
 
       <div className="mt-8 space-y-4">
-        <p className="font-bold">Tester profile</p>
+        <div className="flex items-center justify-between">
+          <p className="font-bold">Tester profile</p>
+          <StatusBadge label={tester.id} tone="neutral" />
+        </div>
+        <InfoCard icon={<ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />}>
+          Tester profile saved on this device — offline field use works without signing in again.
+          {tester.last_active_at && ` Last active ${new Date(tester.last_active_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}.`}
+        </InfoCard>
+
         <FormField label="Name" value={tester.name} onChange={(event) => onTesterChange({ ...tester, name: event.target.value })} />
         <FormField label="Role" value={tester.role} onChange={(event) => onTesterChange({ ...tester, role: event.target.value })} />
-        <FormField label="Home base" value={tester.home_base} onChange={(event) => onTesterChange({ ...tester, home_base: event.target.value })} />
+        <SelectField
+          label="Experience level"
+          value={tester.experience_level}
+          onChange={(event) => onTesterChange({ ...tester, experience_level: event.target.value as Tester["experience_level"] })}
+        >
+          <option value="beginner">Beginner</option>
+          <option value="experienced">Experienced</option>
+          <option value="trainer">Trainer</option>
+        </SelectField>
+        <FormField
+          label="Home base / deployment site"
+          value={tester.home_base}
+          onChange={(event) => onTesterChange({ ...tester, home_base: event.target.value })}
+        />
+        <SelectField
+          label="Instruction mode"
+          value={tester.instruction_mode}
+          onChange={(event) => onTesterChange({ ...tester, instruction_mode: event.target.value as Tester["instruction_mode"] })}
+        >
+          <option value="beginner">Beginner — more guidance</option>
+          <option value="concise">Concise — less hand-holding</option>
+        </SelectField>
+        <div>
+          <p className="field-label">Preferred language</p>
+          <button
+            className="flex w-full items-center justify-between rounded-2xl border border-field-line bg-field-surface px-4 py-3 text-left transition hover:bg-field-card"
+            onClick={onLanguage}
+          >
+            <span className="text-sm font-semibold">{preferredLanguageName}</span>
+            <span className="text-xs font-bold text-[var(--gold)]">Change language</span>
+          </button>
+        </div>
       </div>
 
       <div className="mt-8">
@@ -110,6 +154,9 @@ export function SettingsScreen({
       <DangerButton fullWidth className="mt-8" icon={<LogOut className="h-5 w-5" />} onClick={onLogout}>
         Log out
       </DangerButton>
+      <p className="mt-2 text-center text-xs opacity-50">
+        Logging out only signs you out on this device — your tester profile stays saved and is reused next time you continue as demo tester.
+      </p>
     </section>
   );
 }

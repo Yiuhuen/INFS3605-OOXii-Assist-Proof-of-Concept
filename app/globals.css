@@ -153,13 +153,23 @@ textarea:focus-visible {
 
   /* Buttons */
   .primary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl border px-5 py-3 text-base font-bold transition disabled:cursor-not-allowed;
+    border-color: transparent;
     background: var(--gold);
     color: var(--gold-ink);
   }
 
   .primary-button:hover:not(:disabled) {
     background: var(--gold-strong);
+  }
+
+  /* A translucent gold at low opacity reads as a muddy brown, not "disabled" —
+     use a clearly neutral/greyed treatment instead so enabled vs. disabled is
+     never ambiguous. */
+  .primary-button:disabled {
+    border-color: var(--line);
+    background: var(--bg-surface);
+    color: var(--muted);
   }
 
   .primary-button-lg {

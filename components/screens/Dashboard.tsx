@@ -1,10 +1,13 @@
 "use client";
 
-import { Globe, LogOut, Mic, PenLine, Play, Settings, ShieldCheck, UploadCloud, UserPlus } from "lucide-react";
+import { BarChart3, Globe, LogOut, Mic, PenLine, Play, Settings, ShieldCheck, UploadCloud, UserPlus } from "lucide-react";
 import type { LanguagePack, Tester, TestRecord } from "@/lib/types";
+import type { InsightTargetPage } from "@/lib/insights";
 import { recordNeedsQc } from "@/lib/qc";
 import { contrastLabels, type DisplaySettings } from "@/lib/settings";
 import { ActionCard, MetricCard, OfflineBadge, PrimaryButton, StatusBadge } from "@/components/ui";
+import { BrandLogo } from "@/components/ui/BrandLogo";
+import { ActionableInsightsPreview } from "@/components/screens/InsightsScreen";
 
 function greetingForHour(hour: number) {
   if (hour < 12) return "Good morning";
@@ -27,6 +30,8 @@ export function Dashboard({
   onNewClient,
   onQc,
   onExport,
+  onInsights,
+  onInsightNavigate,
   onLanguage,
   onSettings,
   onAdmin,
@@ -43,6 +48,8 @@ export function Dashboard({
   onNewClient: () => void;
   onQc: () => void;
   onExport: () => void;
+  onInsights: () => void;
+  onInsightNavigate: (target: InsightTargetPage) => void;
   onLanguage: () => void;
   onSettings: () => void;
   onAdmin: () => void;
@@ -55,6 +62,8 @@ export function Dashboard({
 
   return (
     <section>
+      <BrandLogo size="small" className="mb-4" />
+
       <div className="mb-6 flex items-start justify-between gap-3">
         <div>
           <p className="text-sm opacity-70">{greeting}</p>
@@ -88,12 +97,17 @@ export function Dashboard({
         {hasDraftClient ? "Continue test recording" : "Start test recording"}
       </PrimaryButton>
 
+      <div className="mt-6">
+        <ActionableInsightsPreview records={records} onNavigate={onInsightNavigate} onSeeAll={onInsights} />
+      </div>
+
       <p className="mb-6 mt-6 text-xs font-bold uppercase tracking-wide opacity-50">More options</p>
 
       <div className="mb-6 grid grid-cols-2 gap-3">
         <ActionCard icon={<UserPlus className="h-5 w-5" />} label="New anonymous client" onClick={onNewClient} />
         <ActionCard icon={<ShieldCheck className="h-5 w-5" />} label="QC Review" badge={needsQc || undefined} onClick={onQc} />
         <ActionCard icon={<UploadCloud className="h-5 w-5" />} label="Export records" onClick={onExport} />
+        <ActionCard icon={<BarChart3 className="h-5 w-5" />} label="Insights" onClick={onInsights} />
         <ActionCard icon={<Globe className="h-5 w-5" />} label="Language packs" onClick={onLanguage} />
         <ActionCard icon={<Settings className="h-5 w-5" />} label="Display settings" onClick={onSettings} />
         <ActionCard icon={<PenLine className="h-5 w-5" />} label="Prompt editor" onClick={onAdmin} />

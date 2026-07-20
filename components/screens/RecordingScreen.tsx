@@ -48,7 +48,9 @@ function LiveTranscriptPanel({
   transcriptUnavailable,
   languageName,
   unclearSegments,
-  onMarkUnclear
+  onMarkUnclear,
+  manualTranscriptNote,
+  onManualTranscriptNoteChange
 }: {
   segments: TranscriptSegment[];
   interimText: string;
@@ -56,6 +58,8 @@ function LiveTranscriptPanel({
   languageName: string;
   unclearSegments: UnclearSegment[];
   onMarkUnclear: () => void;
+  manualTranscriptNote: string;
+  onManualTranscriptNoteChange: (value: string) => void;
 }) {
   return (
     <div className="field-card mt-5">
@@ -71,8 +75,15 @@ function LiveTranscriptPanel({
       </p>
 
       {transcriptUnavailable && (
-        <div className="mt-3">
-          <WarningCard>Recording saved. Add manual notes if needed — live transcript assist isn&apos;t available in this browser.</WarningCard>
+        <div className="mt-3 space-y-3">
+          <WarningCard>Live transcript unavailable. Audio is still saved.</WarningCard>
+          <TextAreaField
+            label="Manual transcript entry"
+            value={manualTranscriptNote}
+            onChange={(event) => onManualTranscriptNoteChange(event.target.value)}
+            placeholder="Type what the client said, since live transcript isn't available in this browser."
+            rows={3}
+          />
         </div>
       )}
 
@@ -97,8 +108,9 @@ function LiveTranscriptPanel({
       <SecondaryButton fullWidth className="mt-3" icon={<AlertTriangle className="h-4 w-4" />} onClick={onMarkUnclear}>
         Mark section unclear
       </SecondaryButton>
+      <p className="mt-2 text-xs opacity-70">Ask client to repeat or flag for QC.</p>
       {unclearSegments.length > 0 && (
-        <p className="mt-2 text-xs opacity-70">
+        <p className="mt-1 text-xs opacity-70">
           {unclearSegments.length} section{unclearSegments.length === 1 ? "" : "s"} flagged unclear — will need QC review.
         </p>
       )}
@@ -157,6 +169,11 @@ function ManualEntryFields({
   if (step.id === "glasses-check") {
     return (
       <div className="space-y-4">
+        <FormField
+          label="Currently has glasses"
+          value={manualFields.current_glasses}
+          onChange={(event) => setManualFields({ ...manualFields, current_glasses: event.target.value })}
+        />
         <FormField
           label="Glasses selected"
           value={manualFields.glasses_selected}
@@ -340,6 +357,8 @@ export function RecordingScreen({
           languageName={languageName}
           unclearSegments={unclearSegments}
           onMarkUnclear={onMarkUnclear}
+          manualTranscriptNote={manualFields.additional_notes}
+          onManualTranscriptNoteChange={(value) => setManualFields({ ...manualFields, additional_notes: value })}
         />
       )}
 
