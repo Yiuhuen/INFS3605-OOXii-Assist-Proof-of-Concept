@@ -26,9 +26,11 @@ import { applyDisplaySettings, loadDisplaySettings, saveDisplaySettings, type Di
 import { speakClientPrompt } from "@/lib/speech";
 import {
   createBrowserRecognitionController,
-  createMockLiveTranscriptController,
+  getSpeechRecognitionConstructor,
+  isLiveTranscriptSupportedLanguage,
   mockTranslateToEnglish,
-  type LiveTranscriptController
+  type LiveTranscriptController,
+  type TranscriptEngineStatus
 } from "@/lib/liveTranscript";
 import type { InsightTargetPage } from "@/lib/insights";
 import {
@@ -142,6 +144,18 @@ export default function Home() {
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
   const [interimText, setInterimText] = useState("");
   const [transcriptUnavailable, setTranscriptUnavailable] = useState(false);
+  /** Why transcriptUnavailable is true — drives which honest fallback copy the recording screen shows. */
+  const [transcriptUnavailableReason, setTranscriptUnavailableReason] = useState<"browser" | "language" | null>(null);
+  const [transcriptEngineStatus, setTranscriptEngineStatus] = useState<TranscriptEngineStatus>("idle");
+  const [lastTranscriptError, setLastTranscriptError] = useState("");
+  const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(false);
+  /** Feature-detected via navigator.permissions — "unsupported" on browsers (e.g. Safari) that don't expose the Permissions API for "microphone". Dev diagnostics only. */
+  const [micPermissionStatus, setMicPermissionStatus] = useState<PermissionState | "unsupported">("unsupported");
+  /** Standalone "Test speech recognition only" diagnostic — runs SpeechRecognition without MediaRecorder or touching the real transcript state. QA/dev use only. */
+  const [sttTestStatus, setSttTestStatus] = useState<TranscriptEngineStatus>("idle");
+  const [sttTestInterim, setSttTestInterim] = useState("");
+  const [sttTestFinalText, setSttTestFinalText] = useState("");
+  const [sttTestError, setSttTestError] = useState("");
   const [promptMarkers, setPromptMarkers] = useState<PromptMarker[]>([]);
   const [unclearSegments, setUnclearSegments] = useState<UnclearSegment[]>([]);
   const [rawTranscriptLanguage, setRawTranscriptLanguage] = useState<LanguageCode>("en");
@@ -164,16 +178,39 @@ export default function Home() {
   const audioChunksRef = useRef<Blob[]>([]);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveTranscriptRef = useRef<LiveTranscriptController | null>(null);
+  /** Separate controller for the dev-only "Test speech recognition only" button — deliberately isolated from liveTranscriptRef so it never touches MediaRecorder or the real transcript segments. */
+  const sttTestControllerRef = useRef<LiveTranscriptController | null>(null);
   const currentStepIdRef = useRef<string>("");
+  /** True once the tester (or the app) has told the live transcript engine to
+   * stop for good — consulted by the recognition controller before every
+   * auto-restart attempt so an intentional stop (pause, manual Stop, Finish &
+   * review) can never race with a pending "restart after silence" timer. */
+  const intentionalStopRef = useRef(false);
 
   useEffect(() => {
     setTester(loadTester());
     setLanguagePacks(loadLanguagePacks());
     setRecords(loadRecords());
     setBrowserOnline(navigator.onLine);
+    setSpeechRecognitionSupported(getSpeechRecognitionConstructor() !== null);
     const settings = loadDisplaySettings();
     setDisplaySettings(settings);
     applyDisplaySettings(settings);
+
+    let micPermissionStatusRef: PermissionStatus | null = null;
+    const handleMicPermissionChange = () => {
+      if (micPermissionStatusRef) setMicPermissionStatus(micPermissionStatusRef.state);
+    };
+    if (navigator.permissions?.query) {
+      navigator.permissions
+        .query({ name: "microphone" as PermissionName })
+        .then((status) => {
+          micPermissionStatusRef = status;
+          setMicPermissionStatus(status.state);
+          status.addEventListener("change", handleMicPermissionChange);
+        })
+        .catch(() => setMicPermissionStatus("unsupported"));
+    }
 
     const goOnline = () => setBrowserOnline(true);
     const goOffline = () => setBrowserOnline(false);
@@ -207,6 +244,7 @@ export default function Home() {
       return () => {
         window.removeEventListener("online", goOnline);
         window.removeEventListener("offline", goOffline);
+        micPermissionStatusRef?.removeEventListener("change", handleMicPermissionChange);
         subscription.subscription.unsubscribe();
       };
     }
@@ -220,6 +258,7 @@ export default function Home() {
     return () => {
       window.removeEventListener("online", goOnline);
       window.removeEventListener("offline", goOffline);
+      micPermissionStatusRef?.removeEventListener("change", handleMicPermissionChange);
     };
   }, []);
 
@@ -354,6 +393,10 @@ export default function Home() {
     setTranscriptSegments([]);
     setInterimText("");
     setTranscriptUnavailable(false);
+    setTranscriptUnavailableReason(null);
+    setTranscriptEngineStatus("idle");
+    setLastTranscriptError("");
+    intentionalStopRef.current = false;
     setPromptMarkers([]);
     setUnclearSegments([]);
     setRawTranscriptLanguage("en");
@@ -450,8 +493,22 @@ export default function Home() {
 
   function startLiveTranscript() {
     stopLiveTranscript();
+    intentionalStopRef.current = false;
     const language = activePack.code;
     setTranscriptUnavailable(false);
+    setTranscriptUnavailableReason(null);
+    setLastTranscriptError("");
+
+    if (!isLiveTranscriptSupportedLanguage(language)) {
+      // No real recognizer for this language in the PoC — never simulate
+      // live voice-to-text. Audio still records; the tester can add a
+      // manual transcript instead.
+      setTranscriptUnavailable(true);
+      setTranscriptUnavailableReason("language");
+      setTranscriptEngineStatus("stopped");
+      return;
+    }
+
     const handlers = {
       onInterim: (text: string) => setInterimText(text),
       onFinal: (text: string, confidence?: number) => {
@@ -469,26 +526,76 @@ export default function Home() {
             stepId: currentStepIdRef.current
           }
         ]);
+      },
+      onStatusChange: (status: TranscriptEngineStatus) => setTranscriptEngineStatus(status),
+      onError: (errorCode: string) => {
+        setLastTranscriptError(errorCode);
+        // "no-speech"/"aborted"/"network" are transient — the controller
+        // keeps retrying on its own. Only permission/hardware errors mean
+        // the engine genuinely can't run, so only those flip the UI over to
+        // the honest "unavailable" fallback + manual transcript box.
+        if (errorCode === "not-allowed" || errorCode === "service-not-allowed" || errorCode === "audio-capture") {
+          setTranscriptUnavailable(true);
+          setTranscriptUnavailableReason("browser");
+        }
       }
     };
 
-    const controller =
-      language === "en"
-        ? createBrowserRecognitionController(handlers)
-        : createMockLiveTranscriptController(language, () => currentStepIdRef.current, handlers);
+    const shouldContinue = () => !intentionalStopRef.current;
+    const controller = createBrowserRecognitionController(handlers, shouldContinue);
 
     if (!controller) {
       setTranscriptUnavailable(true);
+      setTranscriptUnavailableReason("browser");
+      setTranscriptEngineStatus("error");
       return;
     }
     liveTranscriptRef.current = controller;
     controller.start();
   }
 
+  /**
+   * Dev/QA-only diagnostic: runs SpeechRecognition on its own, completely
+   * independent of MediaRecorder and the real transcriptSegments state, so a
+   * tester can confirm the browser engine works before/without starting a
+   * full recording. Only reachable from the debug-gated diagnostics panel.
+   */
+  function startSttOnlyTest() {
+    sttTestControllerRef.current?.stop();
+    setSttTestInterim("");
+    setSttTestFinalText("");
+    setSttTestError("");
+    const controller = createBrowserRecognitionController({
+      onInterim: (text) => setSttTestInterim(text),
+      onFinal: (text) => {
+        if (!text.trim()) return;
+        setSttTestInterim("");
+        setSttTestFinalText((prev) => (prev ? `${prev} ${text.trim()}` : text.trim()));
+      },
+      onStatusChange: (status) => setSttTestStatus(status),
+      onError: (errorCode) => setSttTestError(errorCode)
+    });
+    if (!controller) {
+      setSttTestStatus("error");
+      setSttTestError("unsupported");
+      return;
+    }
+    sttTestControllerRef.current = controller;
+    controller.start();
+  }
+
+  function stopSttOnlyTest() {
+    sttTestControllerRef.current?.stop();
+    sttTestControllerRef.current = null;
+    setSttTestInterim("");
+    setSttTestStatus("stopped");
+  }
+
   function stopLiveTranscript() {
     liveTranscriptRef.current?.stop();
     liveTranscriptRef.current = null;
     setInterimText("");
+    setTranscriptEngineStatus("idle");
   }
 
   function markSectionUnclear() {
@@ -557,6 +664,7 @@ export default function Home() {
   }
 
   function stopRecording() {
+    intentionalStopRef.current = true;
     mediaRecorderRef.current?.stop();
     setRecording(false);
     setPaused(false);
@@ -606,6 +714,7 @@ export default function Home() {
    * opens already populated when segments exist.
    */
   function finishRecordingAndReview() {
+    intentionalStopRef.current = true;
     const pendingInterim = interimText.trim();
     const stepIdForPending = currentStepIdRef.current;
     const recordingHappened = Boolean(recordingStartedAt) && !micError;
@@ -1086,6 +1195,17 @@ export default function Home() {
           transcriptSegments={transcriptSegments}
           interimText={interimText}
           transcriptUnavailable={transcriptUnavailable}
+          transcriptUnavailableReason={transcriptUnavailableReason}
+          transcriptEngineStatus={transcriptEngineStatus}
+          lastTranscriptError={lastTranscriptError}
+          speechRecognitionSupported={speechRecognitionSupported}
+          micPermissionStatus={micPermissionStatus}
+          sttTestStatus={sttTestStatus}
+          sttTestInterim={sttTestInterim}
+          sttTestFinalText={sttTestFinalText}
+          sttTestError={sttTestError}
+          onStartSttOnlyTest={startSttOnlyTest}
+          onStopSttOnlyTest={stopSttOnlyTest}
           unclearSegments={unclearSegments}
           onMarkUnclear={markSectionUnclear}
           speakPrompt={speakPrompt}

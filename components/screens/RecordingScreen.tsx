@@ -26,6 +26,10 @@ import {
 } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { isSpeechAvailable } from "@/lib/speech";
+import { type TranscriptEngineStatus } from "@/lib/liveTranscript";
+
+/** Dev diagnostics panel: on by default outside production, or opt-in in production via NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG=true. Both sides are inlined at build time by Next.js. */
+const SHOW_TRANSCRIPT_DEBUG = process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG === "true";
 
 function stepTitle(stepId: string) {
   if (stepId === "right-distance" || stepId === "left-distance") return "Distance vision";
@@ -102,17 +106,67 @@ function CompactPromptCard({
   );
 }
 
+type TranscriptPanelStatus = { label: string; tone: "neutral" | "warn" | "good" | "danger" };
+
 /**
- * "Live transcript assist" is a helper only — a growing draft of what was
- * heard, never the source record. The audio recording and/or manual notes
- * remain valid on their own, and any unclear segment still needs a human to
+ * Priority-ordered status the tester sees above the transcript box. Mirrors
+ * the actual data (segments/interimText) plus the underlying engine's
+ * lifecycle (transcriptEngineStatus) so "nothing here yet" always reads as
+ * either "still listening" or an honest failure — never a dead placeholder.
+ */
+function deriveTranscriptPanelStatus({
+  recording,
+  paused,
+  recordingStatus,
+  segments,
+  interimText,
+  engineStatus
+}: {
+  recording: boolean;
+  paused: boolean;
+  recordingStatus: RecordingStatus;
+  segments: TranscriptSegment[];
+  interimText: string;
+  engineStatus: TranscriptEngineStatus;
+}): TranscriptPanelStatus {
+  const stopped = !recording && !paused;
+  if (stopped && recordingStatus === "recorded" && segments.length > 0) {
+    return { label: "Transcript ready for review", tone: "good" };
+  }
+  if (stopped && recordingStatus === "recorded" && segments.length === 0) {
+    return { label: "No transcript captured", tone: "warn" };
+  }
+  if (interimText) {
+    return { label: "Transcript updating…", tone: "warn" };
+  }
+  if (recording && segments.length === 0) {
+    return { label: "Listening…", tone: "warn" };
+  }
+  if (engineStatus === "restarting") {
+    return { label: "Reconnecting…", tone: "warn" };
+  }
+  if (paused) {
+    return { label: "Paused", tone: "neutral" };
+  }
+  return { label: "Listening…", tone: "warn" };
+}
+
+/**
+ * "Live transcript" is a helper only — a growing draft of what was heard,
+ * never the source record. The audio recording and/or manual notes remain
+ * valid on their own, and any unclear segment still needs a human to
  * confirm it during QC review before export.
  */
 function LiveTranscriptPanel({
   segments,
   interimText,
   transcriptUnavailable,
+  transcriptUnavailableReason,
+  recording,
+  paused,
+  recordingStatus,
   languageName,
+  engineStatus,
   unclearSegments,
   manualTranscriptNote,
   onManualTranscriptNoteChange
@@ -120,12 +174,23 @@ function LiveTranscriptPanel({
   segments: TranscriptSegment[];
   interimText: string;
   transcriptUnavailable: boolean;
+  transcriptUnavailableReason: "browser" | "language" | null;
+  recording: boolean;
+  paused: boolean;
+  recordingStatus: RecordingStatus;
   languageName: string;
+  engineStatus: TranscriptEngineStatus;
   unclearSegments: UnclearSegment[];
   manualTranscriptNote: string;
   onManualTranscriptNoteChange: (value: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const audioRecordedNoSegments = !recording && !paused && recordingStatus === "recorded" && segments.length === 0 && !transcriptUnavailable;
+  const status = deriveTranscriptPanelStatus({ recording, paused, recordingStatus, segments, interimText, engineStatus });
+  const unavailableMessage =
+    transcriptUnavailableReason === "language"
+      ? "Live transcript is not available for this language in the PoC. Audio is still saved."
+      : "Live transcript unavailable in this browser. Audio is still saved.";
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -142,24 +207,30 @@ function LiveTranscriptPanel({
           </span>
           Live transcript
         </p>
-        <StatusBadge label={languageName} tone="language" />
+        <div className="flex items-center gap-1.5">
+          <StatusBadge label={languageName} tone="language" />
+        </div>
+      </div>
+
+      <div className="mt-1.5">
+        <StatusBadge label={status.label} tone={status.tone} />
       </div>
 
       {transcriptUnavailable ? (
         <div className="mt-2 space-y-2">
-          <WarningCard>Live transcript unavailable. Audio is still saved.</WarningCard>
+          <WarningCard>{unavailableMessage}</WarningCard>
           <TextAreaField
             label="Manual transcript entry"
             value={manualTranscriptNote}
             onChange={(event) => onManualTranscriptNoteChange(event.target.value)}
-            placeholder="Type what the client said, since live transcript isn't available in this browser."
+            placeholder="Type what the client said, since live transcript isn't available."
             rows={3}
           />
         </div>
       ) : (
         <div ref={scrollRef} className="ink-panel mt-2 max-h-40 space-y-1.5 overflow-y-auto p-2.5 text-sm">
-          {segments.length === 0 && !interimText && (
-            <p className="opacity-60">Draft transcript will appear here once recording starts.</p>
+          {segments.length === 0 && !interimText && !audioRecordedNoSegments && (
+            <p className="opacity-60">Listening for speech — text will appear here as the client talks.</p>
           )}
           {segments.map((segment) => (
             <p key={segment.id} className="leading-snug">
@@ -177,11 +248,121 @@ function LiveTranscriptPanel({
         </div>
       )}
 
+      {audioRecordedNoSegments && (
+        <div className="mt-2 space-y-2">
+          <WarningCard>Audio recorded, but no live transcript was captured. Add a manual transcript or send to QC review.</WarningCard>
+          <TextAreaField
+            label="Manual transcript entry"
+            value={manualTranscriptNote}
+            onChange={(event) => onManualTranscriptNoteChange(event.target.value)}
+            placeholder="Type what the client said, since live transcript wasn't captured for this recording."
+            rows={3}
+          />
+        </div>
+      )}
+
       <p className="mt-1.5 text-[11px] opacity-60">
         Optional draft only — the recording (and any manual notes) is the official record.
         {unclearSegments.length > 0 &&
           ` ${unclearSegments.length} section${unclearSegments.length === 1 ? "" : "s"} flagged unclear — will need QC review.`}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Dev/QA-only diagnostics — always available when SHOW_TRANSCRIPT_DEBUG is
+ * on, independent of whether a recording/mic session is active, so the
+ * standalone "Test speech recognition only" button can be used before (or
+ * without) ever starting a real recording.
+ */
+function TranscriptDiagnosticsPanel({
+  segments,
+  interimText,
+  engineStatus,
+  lastTranscriptError,
+  speechRecognitionSupported,
+  micPermissionStatus,
+  currentStepId,
+  recordingStatus,
+  sttTestStatus,
+  sttTestInterim,
+  sttTestFinalText,
+  sttTestError,
+  onStartSttOnlyTest,
+  onStopSttOnlyTest
+}: {
+  segments: TranscriptSegment[];
+  interimText: string;
+  engineStatus: TranscriptEngineStatus;
+  lastTranscriptError: string;
+  speechRecognitionSupported: boolean;
+  micPermissionStatus: PermissionState | "unsupported";
+  currentStepId: string;
+  recordingStatus: RecordingStatus;
+  sttTestStatus: TranscriptEngineStatus;
+  sttTestInterim: string;
+  sttTestFinalText: string;
+  sttTestError: string;
+  onStartSttOnlyTest: () => void;
+  onStopSttOnlyTest: () => void;
+}) {
+  const finalTranscriptText = segments
+    .filter((segment) => segment.isFinal && segment.text.trim())
+    .map((segment) => segment.text)
+    .join(" ");
+
+  return (
+    <div className="field-card mt-3 space-y-2 p-3">
+      <p className="text-sm font-bold">Speech recognition diagnostics</p>
+      <Disclosure label="Transcript diagnostics">
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80">
+          <dt className="opacity-60">Browser STT supported</dt>
+          <dd>{speechRecognitionSupported ? "yes" : "no"}</dd>
+          <dt className="opacity-60">Engine status</dt>
+          <dd>{engineStatus}</dd>
+          <dt className="opacity-60">Last error</dt>
+          <dd>{lastTranscriptError || "none"}</dd>
+          <dt className="opacity-60">Segment count</dt>
+          <dd>{segments.length}</dd>
+          <dt className="opacity-60">Interim text</dt>
+          <dd className="break-words">{interimText || "—"}</dd>
+          <dt className="opacity-60">Final transcript text</dt>
+          <dd className="break-words">{finalTranscriptText || "—"}</dd>
+          <dt className="opacity-60">Current step id</dt>
+          <dd>{currentStepId || "—"}</dd>
+          <dt className="opacity-60">Recording status</dt>
+          <dd>{recordingStatus}</dd>
+          <dt className="opacity-60">Mic permission</dt>
+          <dd>{micPermissionStatus}</dd>
+        </dl>
+      </Disclosure>
+
+      <Disclosure label="Speech recognition test">
+        <div className="space-y-2">
+          <p className="text-[11px] opacity-70">
+            QA only — runs SpeechRecognition on its own, without MediaRecorder or the main transcript. Say
+            &ldquo;Testing speech recognition for OOXii Assist&rdquo; and confirm the text below updates live.
+          </p>
+          <div className="flex items-center gap-2">
+            {sttTestStatus === "listening" || sttTestStatus === "restarting" ? (
+              <SecondaryButton className="px-3 py-1.5 text-xs" onClick={onStopSttOnlyTest}>
+                Stop test
+              </SecondaryButton>
+            ) : (
+              <SecondaryButton className="px-3 py-1.5 text-xs" onClick={onStartSttOnlyTest} disabled={!speechRecognitionSupported}>
+                Start STT test
+              </SecondaryButton>
+            )}
+            <StatusBadge label={sttTestStatus} tone={sttTestStatus === "error" ? "danger" : "neutral"} />
+          </div>
+          <div className="ink-panel space-y-1 p-2 text-xs">
+            <p className="opacity-90">{sttTestFinalText || "No final text yet."}</p>
+            {sttTestInterim && <p className="italic opacity-60">…{sttTestInterim}</p>}
+          </div>
+          {sttTestError && <p className="text-[11px] text-red-300">Last test error: {sttTestError}</p>}
+        </div>
+      </Disclosure>
     </div>
   );
 }
@@ -288,6 +469,17 @@ export function RecordingScreen({
   transcriptSegments,
   interimText,
   transcriptUnavailable,
+  transcriptUnavailableReason,
+  transcriptEngineStatus,
+  lastTranscriptError,
+  speechRecognitionSupported,
+  micPermissionStatus,
+  sttTestStatus,
+  sttTestInterim,
+  sttTestFinalText,
+  sttTestError,
+  onStartSttOnlyTest,
+  onStopSttOnlyTest,
   unclearSegments,
   onMarkUnclear,
   speakPrompt,
@@ -323,6 +515,17 @@ export function RecordingScreen({
   transcriptSegments: TranscriptSegment[];
   interimText: string;
   transcriptUnavailable: boolean;
+  transcriptUnavailableReason: "browser" | "language" | null;
+  transcriptEngineStatus: TranscriptEngineStatus;
+  lastTranscriptError: string;
+  speechRecognitionSupported: boolean;
+  micPermissionStatus: PermissionState | "unsupported";
+  sttTestStatus: TranscriptEngineStatus;
+  sttTestInterim: string;
+  sttTestFinalText: string;
+  sttTestError: string;
+  onStartSttOnlyTest: () => void;
+  onStopSttOnlyTest: () => void;
   unclearSegments: UnclearSegment[];
   onMarkUnclear: () => void;
   speakPrompt: (text: string) => void;
@@ -413,10 +616,34 @@ export function RecordingScreen({
           segments={transcriptSegments}
           interimText={interimText}
           transcriptUnavailable={transcriptUnavailable}
+          transcriptUnavailableReason={transcriptUnavailableReason}
+          recording={recording}
+          paused={paused}
+          recordingStatus={recordingStatus}
           languageName={languageName}
+          engineStatus={transcriptEngineStatus}
           unclearSegments={unclearSegments}
           manualTranscriptNote={manualFields.additional_notes}
           onManualTranscriptNoteChange={(value) => setManualFields({ ...manualFields, additional_notes: value })}
+        />
+      )}
+
+      {SHOW_TRANSCRIPT_DEBUG && (
+        <TranscriptDiagnosticsPanel
+          segments={transcriptSegments}
+          interimText={interimText}
+          engineStatus={transcriptEngineStatus}
+          lastTranscriptError={lastTranscriptError}
+          speechRecognitionSupported={speechRecognitionSupported}
+          micPermissionStatus={micPermissionStatus}
+          currentStepId={step.id}
+          recordingStatus={recordingStatus}
+          sttTestStatus={sttTestStatus}
+          sttTestInterim={sttTestInterim}
+          sttTestFinalText={sttTestFinalText}
+          sttTestError={sttTestError}
+          onStartSttOnlyTest={onStartSttOnlyTest}
+          onStopSttOnlyTest={onStopSttOnlyTest}
         />
       )}
 

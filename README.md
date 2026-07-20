@@ -8,7 +8,7 @@ OOXii Assist is a working Proof of Concept for an offline-first multilingual gui
 4. anonymous client creation
 5. guided testing prompts with client-facing language support and manual field entry
 6. compulsory local audio recording (or an explicit manual override) through the browser MediaRecorder API
-7. mock transcript generation, with edits preserved separately from the original
+7. real live English transcription via the browser's SpeechRecognition API (Tok Pisin/Bislama have no live transcript in this PoC — manual entry instead), with edits preserved separately from the original
 8. mock AI extraction into structured, editable fields
 9. local offline save
 10. optional Supabase sync
@@ -33,7 +33,7 @@ The guided-prompt flow is split into two screens per clinical step: a "testing" 
 - IndexedDB for local audio blobs
 - Browser MediaRecorder API for audio recording
 - Browser SpeechSynthesis API for client-facing prompt audio
-- Mock speech-to-text and mock AI extraction
+- Real browser SpeechRecognition API for live English transcription (`lib/realSpeechRecognition.ts`, `lib/liveTranscript.ts`), plus mock (non-paid) AI field extraction
 - Optional Supabase auth + database sync
 - Vercel-ready deployment
 
@@ -43,6 +43,8 @@ The guided-prompt flow is split into two screens per clinical step: a "testing" 
 npm install
 npm run dev
 ```
+
+Real live transcription uses browser speech recognition and requires a supported browser, microphone permission, and HTTPS or localhost.
 
 Open the local URL shown in the terminal.
 

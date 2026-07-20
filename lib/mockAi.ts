@@ -13,12 +13,6 @@ import { REQUIRED_EXTRACTED_FIELDS, type ExtractedFields } from "./types";
  * ---------------------------------------------------------------------------
  */
 
-export const demoTranscript = `Tester: Please cover your left eye and read the smallest line you can see.
-Client: I can read line 6 with the right eye and line 7 with the left eye. I have not had cataract surgery.
-Tester: Do you currently have glasses?
-Client: No. The trial glasses feel clearer, but the left eye is a little blurry.
-Tester: We selected the blue right eye lens and white left eye lens for review. Client says vision is clearer and comfortable enough.`;
-
 /**
  * Scans left-to-right for "line N ... right|left" pairs. A global regex advances
  * past each matched eye keyword, so "line 6 ... right eye ... line 7 ... left eye"
