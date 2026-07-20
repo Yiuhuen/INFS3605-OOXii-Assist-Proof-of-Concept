@@ -274,6 +274,52 @@ textarea:focus-visible {
     padding: 1.5rem;
   }
 
+  /* Compact sticky prompt card for the recording screen — keeps the active
+     client-facing prompt visible while the tester scrolls the recording
+     controls/live transcript below it, without the height cost of
+     .prompt-card's large hero treatment. */
+  .prompt-card-compact {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    border-radius: 1rem;
+    border: 1px solid var(--gold);
+    background: var(--bg-ink);
+    padding: 0.75rem 0.9rem;
+  }
+
+  /* Small pill button for secondary actions that must not compete with the
+     prompt text — e.g. "Play aloud" / "Why this matters" on the recording
+     screen. Deliberately smaller than .secondary-button. */
+  .chip-button {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
+    border: 1px solid var(--line);
+    background: var(--bg-surface);
+    color: var(--text);
+  }
+
+  .chip-button:hover:not(:disabled) {
+    background: var(--bg-card);
+  }
+
+  .chip-button.is-active {
+    border-color: var(--gold);
+    color: var(--gold);
+  }
+
+  /* Sticky bottom action bar so the tester never has to scroll to reach
+     Mark unclear / Next prompt / Finish & review. Bleeds to the edges of
+     the mobile card (cancels the page's own horizontal padding). */
+  .sticky-action-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    margin: 0 -1rem;
+    padding: 0.65rem 1rem calc(0.65rem + env(safe-area-inset-bottom));
+    background: var(--bg-ink);
+    border-top: 1px solid var(--line);
+  }
+
   .warning-card {
     @apply flex items-start gap-3 rounded-2xl p-4 text-sm;
     border: 1px solid var(--warn-border);

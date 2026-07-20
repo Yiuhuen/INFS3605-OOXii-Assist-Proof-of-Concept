@@ -1,13 +1,22 @@
 "use client";
 
-import { useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, Mic, Pause, Play, Radio, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  HelpCircle,
+  Mic,
+  Pause,
+  Play,
+  Square,
+  Volume2
+} from "lucide-react";
 import type { ManualExtractedFields, PromptStep, RecordingStatus, TranscriptSegment, UnclearSegment } from "@/lib/types";
 import {
   Disclosure,
   FormField,
   PrimaryButton,
-  PromptCard,
   RecordButton,
   SecondaryButton,
   StatusBadge,
@@ -36,6 +45,63 @@ function formatClock(isoTimestamp: string) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/** Compact sticky prompt card — step context, the client-facing question, and
+ * the tester note, with "Play aloud" and "Why this matters" as small chip
+ * buttons rather than a full-height hero card. Stays visible near the top
+ * while the tester scrolls through recording controls and the transcript. */
+function CompactPromptCard({
+  step,
+  stepIndex,
+  totalSteps,
+  languageName,
+  englishGloss,
+  onPlay,
+  speechAvailable
+}: {
+  step: PromptStep;
+  stepIndex: number;
+  totalSteps: number;
+  languageName: string;
+  englishGloss?: string;
+  onPlay: () => void;
+  speechAvailable: boolean;
+}) {
+  const [whyOpen, setWhyOpen] = useState(false);
+
+  return (
+    <div className="prompt-card-compact">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="status-pill">
+          Step {stepIndex + 1} of {totalSteps}
+        </span>
+        <StepBadges stepId={step.id} languageName={languageName} />
+      </div>
+
+      <p className="mt-1.5 flex items-center gap-1.5 text-lg font-black leading-snug">
+        {step.icon && <span className="text-base leading-none">{step.icon}</span>}
+        &ldquo;{step.client_prompt}&rdquo;
+      </p>
+      {englishGloss && <p className="mt-0.5 text-xs opacity-60">English: &ldquo;{englishGloss}&rdquo;</p>}
+
+      <p className="mt-1.5 text-xs opacity-80">
+        <span className="font-bold opacity-100">Tester instruction:</span> {step.tester_instruction}
+      </p>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" className="chip-button" onClick={onPlay} disabled={!speechAvailable} title={speechAvailable ? undefined : "Speech playback unavailable on this device"}>
+          <Volume2 className="h-3.5 w-3.5" />
+          Play aloud
+        </button>
+        <button type="button" className={`chip-button ${whyOpen ? "is-active" : ""}`} onClick={() => setWhyOpen((value) => !value)} aria-expanded={whyOpen}>
+          <HelpCircle className="h-3.5 w-3.5" />
+          Why this matters
+        </button>
+      </div>
+      {whyOpen && <p className="mt-2 text-xs leading-relaxed opacity-70">{step.why_this_matters}</p>}
+    </div>
+  );
+}
+
 /**
  * "Live transcript assist" is a helper only — a growing draft of what was
  * heard, never the source record. The audio recording and/or manual notes
@@ -48,7 +114,6 @@ function LiveTranscriptPanel({
   transcriptUnavailable,
   languageName,
   unclearSegments,
-  onMarkUnclear,
   manualTranscriptNote,
   onManualTranscriptNoteChange
 }: {
@@ -57,25 +122,31 @@ function LiveTranscriptPanel({
   transcriptUnavailable: boolean;
   languageName: string;
   unclearSegments: UnclearSegment[];
-  onMarkUnclear: () => void;
   manualTranscriptNote: string;
   onManualTranscriptNoteChange: (value: string) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [segments, interimText]);
+
   return (
-    <div className="field-card mt-5">
+    <div className="field-card mt-3 p-3">
       <div className="flex items-center justify-between">
-        <p className="flex items-center gap-2 font-bold">
-          <Radio className="h-4 w-4 text-[var(--gold)]" />
-          Live transcript assist
+        <p className="flex items-center gap-1.5 text-sm font-bold">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--gold)] opacity-60" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--gold)]" />
+          </span>
+          Live transcript
         </p>
         <StatusBadge label={languageName} tone="language" />
       </div>
-      <p className="mt-1 text-xs opacity-60">
-        Optional draft only — the recording (and any manual notes) is the official record. Unclear lines still need QC review.
-      </p>
 
-      {transcriptUnavailable && (
-        <div className="mt-3 space-y-3">
+      {transcriptUnavailable ? (
+        <div className="mt-2 space-y-2">
           <WarningCard>Live transcript unavailable. Audio is still saved.</WarningCard>
           <TextAreaField
             label="Manual transcript entry"
@@ -85,46 +156,42 @@ function LiveTranscriptPanel({
             rows={3}
           />
         </div>
+      ) : (
+        <div ref={scrollRef} className="ink-panel mt-2 max-h-40 space-y-1.5 overflow-y-auto p-2.5 text-sm">
+          {segments.length === 0 && !interimText && (
+            <p className="opacity-60">Draft transcript will appear here once recording starts.</p>
+          )}
+          {segments.map((segment) => (
+            <p key={segment.id} className="leading-snug">
+              <span className="mr-1.5 text-[11px] font-bold tabular-nums opacity-50">{formatClock(segment.timestamp)}</span>
+              <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-wide opacity-40">{stepTitle(segment.stepId)}</span>
+              {segment.text}
+            </p>
+          ))}
+          {interimText && (
+            <p className="italic leading-snug opacity-60">
+              <span className="mr-1.5 text-[11px] font-bold tabular-nums opacity-50">…</span>
+              {interimText}
+            </p>
+          )}
+        </div>
       )}
 
-      <div className="ink-panel mt-3 max-h-56 space-y-2 overflow-auto text-sm">
-        {segments.length === 0 && !interimText && (
-          <p className="opacity-60">Draft transcript will appear here once recording starts.</p>
-        )}
-        {segments.map((segment) => (
-          <p key={segment.id}>
-            <span className="mr-2 text-xs font-bold tabular-nums opacity-50">{formatClock(segment.timestamp)}</span>
-            {segment.text}
-          </p>
-        ))}
-        {interimText && (
-          <p className="italic opacity-60">
-            <span className="mr-2 text-xs font-bold tabular-nums opacity-50">…</span>
-            {interimText}
-          </p>
-        )}
-      </div>
-
-      <SecondaryButton fullWidth className="mt-3" icon={<AlertTriangle className="h-4 w-4" />} onClick={onMarkUnclear}>
-        Mark section unclear
-      </SecondaryButton>
-      <p className="mt-2 text-xs opacity-70">Ask client to repeat or flag for QC.</p>
-      {unclearSegments.length > 0 && (
-        <p className="mt-1 text-xs opacity-70">
-          {unclearSegments.length} section{unclearSegments.length === 1 ? "" : "s"} flagged unclear — will need QC review.
-        </p>
-      )}
+      <p className="mt-1.5 text-[11px] opacity-60">
+        Optional draft only — the recording (and any manual notes) is the official record.
+        {unclearSegments.length > 0 &&
+          ` ${unclearSegments.length} section${unclearSegments.length === 1 ? "" : "s"} flagged unclear — will need QC review.`}
+      </p>
     </div>
   );
 }
 
-/** Small collapsed cards previewing the remaining clinical steps — display only, never reorders or edits the sequence. */
+/** Collapsed-by-default preview of the remaining clinical steps — display only, never reorders or edits the sequence. */
 function NextPrompts({ steps }: { steps: PromptStep[] }) {
   if (steps.length === 0) return null;
   return (
-    <div className="field-card mt-5">
-      <p className="font-bold">Next prompts</p>
-      <ol className="mt-3 space-y-2">
+    <Disclosure label={`Upcoming prompts (${steps.length})`}>
+      <ol className="space-y-2">
         {steps.map((step, index) => (
           <li key={step.id} className="flex items-start gap-2 rounded-xl border border-field-line bg-field-surface px-3 py-2 text-sm opacity-80">
             <span className="mt-0.5 text-xs font-bold tabular-nums opacity-50">{index + 2}.</span>
@@ -133,7 +200,7 @@ function NextPrompts({ steps }: { steps: PromptStep[] }) {
           </li>
         ))}
       </ol>
-    </div>
+    </Disclosure>
   );
 }
 
@@ -270,83 +337,75 @@ export function RecordingScreen({
   const recordingEverStarted = recording || paused || recordingStatus === "recorded";
   const recordingLabel = recording && !paused ? "Recording" : recording && paused ? "Paused" : recordingStatus === "recorded" ? "Recorded" : "Not started";
   const recordingTone = recording && !paused ? "danger" : recordingStatus === "recorded" ? "good" : "warn";
+  const canMarkUnclear = recordingEverStarted && !micError;
 
   return (
     <section>
       <ScreenHeader title="Record conversation" subtitle={clientId} onBack={onBack} isOnline={isOnline} />
 
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <span className="status-pill">
-          Step {stepIndex + 1} of {totalSteps}
-        </span>
-        <StepBadges stepId={step.id} languageName={languageName} />
-        {recording && <StatusBadge label="Continuous recording" tone="good" />}
-      </div>
-
-      <p className="mb-1 text-xs font-bold uppercase tracking-wide opacity-60">{stepTitle(step.id)}</p>
-      <PromptCard
-        eyebrow="Ask this question — say it aloud"
-        prompt={step.client_prompt}
+      <CompactPromptCard
+        step={step}
+        stepIndex={stepIndex}
+        totalSteps={totalSteps}
+        languageName={languageName}
         englishGloss={englishGloss}
-        icon={step.icon}
         onPlay={() => speakPrompt(step.audio_prompt_text ?? step.client_prompt)}
         speechAvailable={isSpeechAvailable()}
       />
 
-      <p className="mt-3 text-sm opacity-80">
-        <span className="font-bold opacity-100">Tester instruction:</span> {step.tester_instruction}
-      </p>
-
-      <Disclosure label="Why this matters">{step.why_this_matters}</Disclosure>
-
       {nudgeVisible && (
-        <div className="mt-4">
+        <div className="mt-3">
           <WarningCard>Start recording before asking the question, so the conversation can be checked later.</WarningCard>
         </div>
       )}
       {micError && (
-        <div className="mt-4">
+        <div className="mt-3">
           <WarningCard>Microphone unavailable. An unresolved segment was saved with a timestamp — add a manual note to continue.</WarningCard>
         </div>
       )}
 
-      <div className="field-card mt-5">
+      <div className="field-card mt-3 p-3">
         <div className="flex items-center justify-between">
-          <p className="font-bold">Recording</p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge label={recordingLabel} tone={recordingTone} />
+            <StatusBadge label={isOnline ? "Online" : "Offline"} tone={isOnline ? "good" : "warn"} />
+            {(recordingEverStarted || overrideReason.trim()) && <StatusBadge label="Saved locally" tone="good" />}
+          </div>
           <span className="text-2xl font-black tabular-nums">{formatElapsed(elapsedSeconds)}</span>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-3">
+        <div className="mt-2.5 flex flex-wrap gap-2">
           {!recordingEverStarted && (
-            <RecordButton fullWidth icon={<Mic className="h-5 w-5" />} onClick={startRecording}>
+            <RecordButton fullWidth className="px-4 py-2.5 text-sm" icon={<Mic className="h-4 w-4" />} onClick={startRecording}>
               Start recording
             </RecordButton>
           )}
           {recording && !paused && (
-            <SecondaryButton icon={<Pause className="h-5 w-5" />} onClick={pauseRecording}>
+            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Pause className="h-4 w-4" />} onClick={pauseRecording}>
               Pause
             </SecondaryButton>
           )}
           {recording && paused && (
-            <SecondaryButton icon={<Play className="h-5 w-5" />} onClick={resumeRecording}>
+            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Play className="h-4 w-4" />} onClick={resumeRecording}>
               Resume
             </SecondaryButton>
           )}
           {recording && (
-            <SecondaryButton icon={<Square className="h-5 w-5" />} onClick={stopRecording}>
+            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Square className="h-4 w-4" />} onClick={stopRecording}>
               Stop
             </SecondaryButton>
           )}
         </div>
 
-        {audioUrl && !micError && <audio className="mt-4 w-full" controls src={audioUrl} />}
+        {!isOnline && <p className="mt-2 text-[11px] opacity-60">Processing can happen after sync — this test still completes fully offline.</p>}
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <StatusBadge label={recordingLabel} tone={recordingTone} />
-          <StatusBadge label={isOnline ? "Online" : "Offline"} tone={isOnline ? "good" : "warn"} />
-          {(recordingEverStarted || overrideReason.trim()) && <StatusBadge label="Saved locally" tone="good" />}
-        </div>
-        {!isOnline && <p className="mt-2 text-xs opacity-60">Processing can happen after sync — this test still completes fully offline.</p>}
+        {recordingStatus === "recorded" && !recording && audioUrl && !micError && (
+          <div className="mt-2.5">
+            <Disclosure label="Audio preview">
+              <audio className="w-full" controls src={audioUrl} />
+            </Disclosure>
+          </div>
+        )}
       </div>
 
       {recordingEverStarted && !micError && (
@@ -356,16 +415,17 @@ export function RecordingScreen({
           transcriptUnavailable={transcriptUnavailable}
           languageName={languageName}
           unclearSegments={unclearSegments}
-          onMarkUnclear={onMarkUnclear}
           manualTranscriptNote={manualFields.additional_notes}
           onManualTranscriptNoteChange={(value) => setManualFields({ ...manualFields, additional_notes: value })}
         />
       )}
 
-      <NextPrompts steps={upcomingSteps} />
+      <div className="mt-3">
+        <NextPrompts steps={upcomingSteps} />
+      </div>
 
       <button
-        className="mt-5 flex w-full items-center justify-between rounded-2xl border border-field-line bg-field-card px-4 py-3 text-left text-sm font-semibold"
+        className="mt-1 flex w-full items-center justify-between rounded-2xl border border-field-line bg-field-card px-3 py-2.5 text-left text-sm font-semibold"
         onClick={() => setShowOverrideInput(!showOverrideInput)}
       >
         Cannot record?
@@ -392,18 +452,22 @@ export function RecordingScreen({
         </div>
       )}
 
-      <PrimaryButton fullWidth className="mt-6" disabled={!canProceed} icon={<ChevronRight className="h-5 w-5" />} onClick={onNext}>
-        {isLastStep ? "Finish & review transcript" : "Next prompt"}
-      </PrimaryButton>
-      <p className="mt-2 text-center text-xs opacity-60">
-        {canProceed
-          ? isLastStep
-            ? "Stop recording, then review the transcript."
-            : "Recording continues — moving to the next prompt won't interrupt it."
-          : isLastStep
-            ? "Stop recording or use manual override to continue."
-            : "Start recording or use manual override to continue."}
-      </p>
+      {/* Spacer so content never sits directly under the sticky action bar. */}
+      <div className="h-4" />
+
+      <div className="sticky-action-bar flex items-center gap-2">
+        <SecondaryButton
+          className="px-3.5 py-2.5 text-sm"
+          icon={<AlertTriangle className="h-4 w-4" />}
+          onClick={onMarkUnclear}
+          disabled={!canMarkUnclear}
+        >
+          Mark unclear
+        </SecondaryButton>
+        <PrimaryButton fullWidth className="py-2.5 text-sm" disabled={!canProceed} icon={<ChevronRight className="h-4 w-4" />} onClick={onNext}>
+          {isLastStep ? "Finish & review" : "Next prompt"}
+        </PrimaryButton>
+      </div>
     </section>
   );
 }

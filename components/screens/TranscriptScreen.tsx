@@ -1,9 +1,9 @@
 "use client";
 
-import { AlertTriangle, Languages, ListChecks, PencilLine, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Languages, ListChecks, PencilLine, RefreshCw, ShieldCheck } from "lucide-react";
 import type { ProcessingStatus, PromptMarker, UnclearSegment } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
-import { Disclosure, InfoCard, PrimaryButton, StatusBadge, WarningCard } from "@/components/ui";
+import { Disclosure, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 function formatDuration(totalSeconds: number) {
@@ -33,6 +33,8 @@ export function TranscriptScreen({
   unclearSegments,
   promptMarkers,
   isOnline,
+  canGenerateDraft,
+  onGenerateDraft,
   onNext,
   onBack
 }: {
@@ -50,6 +52,9 @@ export function TranscriptScreen({
   unclearSegments: UnclearSegment[];
   promptMarkers: PromptMarker[];
   isOnline: boolean;
+  /** True when recording happened but no live transcript segments were captured — audio exists, so a manual rebuild is worth offering instead of leaving the tester stuck. */
+  canGenerateDraft: boolean;
+  onGenerateDraft: () => void;
   onNext: () => void;
   onBack: () => void;
 }) {
@@ -81,6 +86,18 @@ export function TranscriptScreen({
           <p className="mt-2 text-sm opacity-60">No audio available for this record.</p>
         )}
       </div>
+
+      {canGenerateDraft && (
+        <div className="mb-5">
+          <WarningCard>
+            Audio recorded, but no live transcript segments were captured. Please add a manual transcript or continue
+            with QC review.
+          </WarningCard>
+          <SecondaryButton fullWidth className="mt-2" icon={<RefreshCw className="h-4 w-4" />} onClick={onGenerateDraft}>
+            Generate transcript from captured draft
+          </SecondaryButton>
+        </div>
+      )}
 
       {unclearSegments.length > 0 && (
         <div className="mb-5">

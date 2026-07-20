@@ -274,13 +274,16 @@ export default function Home() {
 
   const recordingStatus: RecordingStatus = micError ? "failed" : audioBlob ? "recorded" : overrideReason.trim() ? "manual_override" : "not_recorded";
   const isLastRecordingStep = currentStepIndex === activePack.prompts_json.length - 1;
-  const canProceedRecording = isLastRecordingStep
-    ? recordingStatus === "recorded" || recordingStatus === "manual_override" || (recordingStatus === "failed" && overrideReason.trim().length > 0)
-    : recording ||
-      paused ||
-      recordingStatus === "recorded" ||
-      recordingStatus === "manual_override" ||
-      (recordingStatus === "failed" && overrideReason.trim().length > 0);
+  // Same gate on the last step as any other: an active recording (still in
+  // progress) is enough to proceed. "Finish & review" itself stops the
+  // recording — the tester should never have to tap Stop first just to
+  // unlock the button (see finishRecordingAndReview).
+  const canProceedRecording =
+    recording ||
+    paused ||
+    recordingStatus === "recorded" ||
+    recordingStatus === "manual_override" ||
+    (recordingStatus === "failed" && overrideReason.trim().length > 0);
 
   // Pre-save processing-status previews (no TestRecord/sync_status exists yet at this point).
   const transcriptCapturedPreview = transcriptSegments.some((segment) => segment.isFinal && segment.text.trim());
@@ -562,8 +565,18 @@ export default function Home() {
     stopLiveTranscript();
   }
 
-  function buildRawTranscriptFromSegments(): string {
-    const finalSegments = transcriptSegments.filter((segment) => segment.isFinal && segment.text.trim());
+  /**
+   * `recordingHappened` is passed in explicitly rather than derived from
+   * `recordingStatus`/`audioBlob` here, because audioBlob is only set
+   * asynchronously inside MediaRecorder's `onstop` handler — at the moment
+   * "Finish & review" stops the recorder and builds the transcript in the
+   * same tick, audioBlob (and therefore recordingStatus) hasn't caught up
+   * yet. recordingStartedAt is set synchronously in startRecording, so it's
+   * a reliable signal for "a real recording session happened" independent
+   * of that lag.
+   */
+  function buildRawTranscriptFromSegments(segments: TranscriptSegment[], recordingHappened: boolean): string {
+    const finalSegments = segments.filter((segment) => segment.isFinal && segment.text.trim());
     if (finalSegments.length > 0) {
       return finalSegments
         .slice()
@@ -571,8 +584,10 @@ export default function Home() {
         .map((segment) => segment.text)
         .join("\n");
     }
-    if (recordingStatus === "recorded") {
-      const parts = ["Audio recorded, but no live transcript segments were captured. Review the audio directly during QC."];
+    if (recordingHappened) {
+      const parts = [
+        "Audio recorded, but no live transcript segments were captured. Please add a manual transcript or continue with QC review."
+      ];
       if (manualFields.additional_notes.trim()) parts.push(`Manual notes: ${manualFields.additional_notes.trim()}`);
       return parts.join(" ");
     }
@@ -582,8 +597,43 @@ export default function Home() {
     return parts.join(" ");
   }
 
-  function finalizeRecordingSession() {
-    const transcript = buildRawTranscriptFromSegments();
+  /**
+   * Handles "Finish & review transcript": stops continuous recording (if
+   * still running — the tester does not need to tap Stop separately first),
+   * folds any in-flight interim text into a final segment so it isn't lost,
+   * builds raw_transcript_text from the captured segments immediately, mock
+   * translates it, and only then navigates — so Transcript Review always
+   * opens already populated when segments exist.
+   */
+  function finishRecordingAndReview() {
+    const pendingInterim = interimText.trim();
+    const stepIdForPending = currentStepIdRef.current;
+    const recordingHappened = Boolean(recordingStartedAt) && !micError;
+
+    if (recording || paused) {
+      mediaRecorderRef.current?.stop();
+      setRecording(false);
+      setPaused(false);
+      setRecordingStoppedAt(new Date().toISOString());
+      stopElapsedTimer();
+    }
+    stopLiveTranscript();
+
+    let segmentsForTranscript = transcriptSegments;
+    if (pendingInterim) {
+      const pendingSegment: TranscriptSegment = {
+        id: generateSegmentId(),
+        timestamp: new Date().toISOString(),
+        language: activePack.code,
+        text: pendingInterim,
+        isFinal: true,
+        stepId: stepIdForPending
+      };
+      segmentsForTranscript = [...transcriptSegments, pendingSegment];
+      setTranscriptSegments(segmentsForTranscript);
+    }
+
+    const transcript = buildRawTranscriptFromSegments(segmentsForTranscript, recordingHappened);
     const language = activePack.code;
     const english = mockTranslateToEnglish(transcript, language);
     setRawTranscript(transcript);
@@ -595,10 +645,25 @@ export default function Home() {
     setScreen("transcript");
   }
 
+  /**
+   * "Generate transcript from captured draft" safety button on Transcript
+   * Review — re-runs the same honest, no-fake-STT logic against the latest
+   * segments/manual notes. Never invents a transcript from audio alone.
+   */
+  function regenerateTranscriptDraft() {
+    const recordingHappened = Boolean(recordingStartedAt) && !micError;
+    const transcript = buildRawTranscriptFromSegments(transcriptSegments, recordingHappened);
+    const language = rawTranscriptLanguage || activePack.code;
+    const english = mockTranslateToEnglish(transcript, language);
+    setRawTranscript(transcript);
+    setEnglishProcessingTranscript(english);
+    setCorrectedTranscript(english);
+  }
+
   function goToNextStep() {
     if (!canProceedRecording) return;
     if (currentStepIndex === activePack.prompts_json.length - 1) {
-      finalizeRecordingSession();
+      finishRecordingAndReview();
     } else {
       const nextIndex = currentStepIndex + 1;
       const nextStep = activePack.prompts_json[nextIndex];
@@ -1049,6 +1114,8 @@ export default function Home() {
           unclearSegments={unclearSegments}
           promptMarkers={promptMarkers}
           isOnline={isOnline}
+          canGenerateDraft={!transcriptCapturedPreview && Boolean(recordingStartedAt) && !micError}
+          onGenerateDraft={regenerateTranscriptDraft}
           onNext={goToCapturedFields}
           onBack={() => setScreen("recording")}
         />
