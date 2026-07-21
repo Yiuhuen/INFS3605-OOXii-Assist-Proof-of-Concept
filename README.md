@@ -23,7 +23,9 @@ The app intentionally does **not** produce a medical prescription, change the cl
 
 The UI follows a mobile-first, dark-purple field-tool look: warm gold primary actions, soft lavender text, rounded low-glare cards, and a fixed blue/light colour code for right/left eye badges. Shared building blocks live in `components/ui.tsx` (`PrimaryButton`, `SecondaryButton`, `StatusBadge`, `MetricCard`, `ActionCard`, `PromptCard`, form fields, etc.) and `components/ScreenHeader.tsx` (back button + title + offline badge). Each screen composes these primitives instead of one-off markup, so a palette or spacing change only has to happen in one place.
 
-The guided-prompt flow is split into two screens per clinical step: a "testing" screen (client prompt preview, tester instruction, manual entry fields) and a "recording" screen (gold hero prompt, record controls). One continuous recording spans the whole test — visiting the recording screen again on a later step shows whatever state that shared recording is already in.
+Home is a single next-action screen (`components/screens/Dashboard.tsx`), not a dashboard: logo, a compact tester/language/online status row, workflow progress dots, and exactly one primary button, driven entirely by `lib/workflow.ts` `getNextAction()`. Everything else (language packs, display settings, replay training, QC review, insights, export, the prompt editor) lives one tap away behind **More** (`components/screens/MoreScreen.tsx`), grouped into Field tools / Review & reporting / Admin tools, so the normal tester flow never sees them unless they go looking.
+
+Recording is one screen with a swipeable prompt card (`components/screens/RecordingScreen.tsx`): swiping left/right (or the Previous/Next fallback buttons, or arrow keys) changes which prompt is shown and logs a timestamped marker, without ever pausing the continuous recording, clearing the transcript, or reordering the fixed clinical sequence. Audio playback is deliberately **not** shown on this screen — it only appears afterwards, on Transcript Review, once the recording is finished.
 
 ## Tech stack
 
@@ -106,11 +108,23 @@ The data model keeps the original transcript and any edits clearly separated so 
 - `extraction_source` — `raw_transcript`, `corrected_transcript`, or `manual_override`, recorded so QC knows what extraction ran against.
 - `edited_by_user` / `requires_qc_verification` — set together whenever a field is hand-edited; the captured-fields screen shows an **"Edited — verify in QC"** badge.
 
-Clicking **Next** (the AI extraction step, deliberately not labelled "AI" in the tester-facing flow) re-runs extraction against the corrected transcript if one was entered, otherwise the raw transcript.
+Clicking **Next** (the extraction step, deliberately not labelled "AI" in the tester-facing flow) re-runs extraction against the corrected transcript if one was entered, otherwise the raw transcript.
+
+### Transcript quality and translation safety
+
+The transcript is never treated as automatically correct (`lib/transcriptQuality.ts`, `lib/translationSafety.ts`, `lib/domainLexicon.ts`). Every transcript is scanned for:
+
+- known speech-to-text misrecognitions in a vision-testing vocabulary (e.g. "blood" → "blind", "classes" → "glasses", "write eye" → "right eye"),
+- negation ambiguity ("can see" vs "cannot see", "comfortable" vs "uncomfortable"),
+- eye-side ambiguity (a segment recorded during the right-eye step mentioning the left eye, or vice versa),
+- low recognition confidence and missing expected terms for the current prompt,
+- translation uncertainty for any non-English record, since the English processing copy is a local mock, not a real translation.
+
+Suggested corrections are **suggest-only**: applying one edits `corrected_transcript_text` only, never `raw_transcript_text`, and is recorded in `corrections_applied` with a flag for whether it touches clinically significant meaning. Any of the above raises the record's `transcript_quality_risk` and forces QC review — see `lib/qc.ts`.
 
 ## QC review rules
 
-A record needs QC review if any of the following is true: low confidence score, missing required fields, a tester/QC edit was made, the recording failed/was overridden/was never captured, the record is still `Unreviewed`, or it is `Pending sync` / `Failed` sync. Marking QC complete is terminal for data-quality issues, but sync problems remain visible until resolved. The homepage QC Review tile shows a live count and the QC screen has filters for: Needs QC, Edited, Missing fields, Low confidence, Recording issues, Pending sync, All records.
+A record needs QC review if any of the following is true: low confidence score, missing required fields, a tester/QC edit was made, the recording failed/was overridden/was never captured, the record is still `Unreviewed`, it is `Pending sync` / `Failed` sync, transcript quality risk is medium/high, a translation requires review, or extraction ran against an unsafe/uncertain transcript. Marking QC complete is terminal for data-quality issues, but sync problems remain visible until resolved. Home shows a live "needs QC" badge; the full QC Review screen (via **More**) has filters for: Needs QC, Edited, Missing fields, Low confidence, Recording issues, Pending sync, All records, plus a per-record transcript-quality panel with human-readable reasons.
 
 ## Display settings
 
@@ -184,37 +198,47 @@ components/
   ScreenHeader.tsx
   ui.tsx
   ServiceWorkerRegistration.tsx
+  ui/BrandLogo.tsx
   screens/
     LoginScreen.tsx
     Dashboard.tsx
+    MoreScreen.tsx
     LanguageScreen.tsx
     TrainingScreen.tsx
     ClientScreen.tsx
-    TestingScreen.tsx
     RecordingScreen.tsx
     TranscriptScreen.tsx
     CapturedFieldsScreen.tsx
     SavedScreen.tsx
     QcScreen.tsx
     ExportScreen.tsx
+    InsightsScreen.tsx
     AdminScreen.tsx
     SettingsScreen.tsx
 lib/
   auth.ts
   csv.ts
+  domainLexicon.ts
   ids.ts
+  insights.ts
   languagePacks.ts
+  liveTranscript.ts
   mockAi.ts
   offlineDb.ts
   qc.ts
+  realSpeechRecognition.ts
   settings.ts
   speech.ts
   storage.ts
   supabase.ts
+  transcriptQuality.ts
+  translationSafety.ts
   types.ts
+  workflow.ts
 public/
   manifest.webmanifest
   service-worker.js
+  brand/ooxii-icon.svg
 supabase/
   schema.sql
   seed.sql

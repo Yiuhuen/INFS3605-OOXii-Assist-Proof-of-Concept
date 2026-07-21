@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
 import type { ExtractedFields, TestRecord } from "@/lib/types";
-import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasons, type QcFilter } from "@/lib/qc";
+import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasonGroups, type QcFilter } from "@/lib/qc";
 import { Disclosure, EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField, type BadgeTone } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
@@ -102,7 +102,12 @@ export function QcScreen({
                   {record.recording_status !== "recorded" && <StatusBadge label="Recording issue" tone="warn" />}
                   {record.sync_status === "Pending sync" && <StatusBadge label="Pending sync" tone="warn" />}
                   {record.sync_status === "Failed" && <StatusBadge label="Sync failed" tone="danger" />}
-                  {record.qc_status === "Approved" ? <StatusBadge label="Complete" tone="good" /> : <StatusBadge label="Needs QC" tone="danger" />}
+                  {/* processingStatusLabel already reads "Needs QC" once processing_status is "needs_qc" — only repeat it here when the transcript isn't captured yet, so the same risk isn't shown twice. "Complete" is never otherwise shown, so it stays unconditional. */}
+                  {record.qc_status === "Approved" ? (
+                    <StatusBadge label="Complete" tone="good" />
+                  ) : (
+                    record.processing_status !== "needs_qc" && <StatusBadge label="Needs QC" tone="danger" />
+                  )}
                 </div>
                 <div className="mt-3 flex items-center justify-end gap-1 text-xs font-bold text-[var(--gold)]">
                   Review record
@@ -122,10 +127,23 @@ export function QcScreen({
               label={`${Math.round(selected.confidence_score * 100)}% confidence`}
               tone={selected.confidence_score < 0.7 ? "warn" : "good"}
             />
-            {qcReasons(selected).map((reason) => (
-              <StatusBadge key={reason} label={reason} tone="warn" />
-            ))}
           </div>
+
+          {qcReasonGroups(selected).length > 0 && (
+            <div className="space-y-2.5">
+              <p className="field-label mb-0">Why this record needs QC</p>
+              {qcReasonGroups(selected).map((group) => (
+                <div key={group.category}>
+                  <p className="text-xs font-bold uppercase tracking-wide text-field-muted">{group.category}</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {group.reasons.map((reason) => (
+                      <StatusBadge key={reason} label={reason} tone="warn" />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {selected.manual_override_reason.trim() && (
             <div className="rounded-2xl border border-field-line bg-field-surface p-3 text-sm">
@@ -296,7 +314,7 @@ export function QcScreen({
       )}
 
       <SecondaryButton fullWidth className="mt-5" onClick={onBack}>
-        Back to dashboard
+        Back to Home
       </SecondaryButton>
     </section>
   );

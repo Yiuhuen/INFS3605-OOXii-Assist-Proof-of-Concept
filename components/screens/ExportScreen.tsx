@@ -94,8 +94,6 @@ export function ExportScreen({
         </div>
       )}
 
-      <ActionableInsightsPreview records={records} onNavigate={onInsightNavigate} onSeeAll={onInsights} />
-
       <div className="space-y-6">
         <div className="field-card">
           <p className="font-bold">A. OOXii Data Longlist</p>
@@ -134,6 +132,12 @@ export function ExportScreen({
             Download Full Audit Longlist
           </PrimaryButton>
         </div>
+      </div>
+
+      {/* Insights follow the download actions — this screen's job is exporting;
+          quality signals are supporting context, not the headline. */}
+      <div className="mt-6">
+        <ActionableInsightsPreview records={records} onNavigate={onInsightNavigate} onSeeAll={onInsights} />
       </div>
 
       <div className="mt-6 space-y-3">

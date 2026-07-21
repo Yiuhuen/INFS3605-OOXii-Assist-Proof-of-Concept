@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Globe, Play, RefreshCw, ShieldCheck } from "lucide-react";
+import { Globe, RefreshCw, ShieldCheck, Video } from "lucide-react";
 import type { LanguagePack, Tester } from "@/lib/types";
 import { CheckboxCard, PrimaryButton, ProgressBar } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
@@ -33,11 +33,13 @@ export function TrainingScreen({
 
       <div className="ink-panel flex aspect-video items-center justify-center text-center">
         <div>
-          <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--gold-tint)] text-[var(--gold)]">
-            <Play className="h-7 w-7" />
+          <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full border border-dashed border-field-line text-field-muted">
+            <Video className="h-7 w-7" />
           </div>
-          <p className="font-bold">Tester guide · 8 min</p>
-          <p className="mt-1 max-w-xs text-sm opacity-60">A partner voice-over can be recorded in {activePack.name}.</p>
+          <p className="font-bold">Tester guide · video not included in this PoC</p>
+          <p className="mt-1 max-w-xs text-sm opacity-60">
+            Read the summary below. A partner voice-over guide can be recorded in {activePack.name} for the live version.
+          </p>
         </div>
       </div>
 
@@ -66,11 +68,11 @@ export function TrainingScreen({
       </div>
 
       <PrimaryButton fullWidth className="mt-6" disabled={!confirmed} onClick={onComplete}>
-        Continue to dashboard
+        Continue to Home
       </PrimaryButton>
 
       {!tester.is_new_tester && (
-        <p className="mt-4 text-center text-sm opacity-60">This refresher is optional — you can return to the dashboard from Settings any time.</p>
+        <p className="mt-4 text-center text-sm opacity-60">This refresher is optional — you can return to Home from Settings any time.</p>
       )}
     </section>
   );

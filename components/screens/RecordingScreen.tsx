@@ -309,7 +309,6 @@ function LiveTranscriptPanel({
   manualTranscriptNote: string;
   onManualTranscriptNoteChange: (value: string) => void;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
   const audioRecordedNoSegments = !recording && !paused && recordingStatus === "recorded" && segments.length === 0 && !transcriptUnavailable;
   const status = deriveTranscriptPanelStatus({ recording, paused, recordingStatus, segments, interimText, engineStatus });
   const unavailableMessage =
@@ -317,10 +316,13 @@ function LiveTranscriptPanel({
       ? "Live transcript is not available for this language in the PoC. Audio is still saved."
       : "Live transcript unavailable in this browser. Audio is still saved.";
 
-  useEffect(() => {
-    const node = scrollRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [segments, interimText]);
+  // Compact by design: this panel is a live draft glance, not the archive —
+  // only the most recent lines are shown so the screen never needs its own
+  // internal scrollbar. The full transcript (every segment, in order) is
+  // always available afterwards on Transcript Review.
+  const RECENT_LINE_COUNT = 5;
+  const recentSegments = segments.slice(-RECENT_LINE_COUNT);
+  const olderSegmentCount = segments.length - recentSegments.length;
 
   return (
     <div className="field-card mt-3 p-3">
@@ -353,11 +355,16 @@ function LiveTranscriptPanel({
           />
         </div>
       ) : (
-        <div ref={scrollRef} className="ink-panel mt-2 max-h-40 space-y-1.5 overflow-y-auto p-2.5 text-sm">
+        <div className="ink-panel mt-2 space-y-1.5 p-2.5 text-sm">
+          {olderSegmentCount > 0 && (
+            <p className="text-[11px] opacity-50">
+              +{olderSegmentCount} earlier line{olderSegmentCount === 1 ? "" : "s"} — full transcript on the next screen.
+            </p>
+          )}
           {segments.length === 0 && !interimText && !audioRecordedNoSegments && (
             <p className="opacity-60">Listening for speech — text will appear here as the client talks.</p>
           )}
-          {segments.map((segment) => (
+          {recentSegments.map((segment) => (
             <p key={segment.id} className="leading-snug">
               <span className="mr-1.5 text-[11px] font-bold tabular-nums opacity-50">{formatClock(segment.timestamp)}</span>
               <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-wide opacity-40">{stepTitle(segment.stepId)}</span>
@@ -387,7 +394,7 @@ function LiveTranscriptPanel({
       )}
 
       <p className="mt-1.5 text-[11px] opacity-60">
-        Optional draft only — the recording (and any manual notes) is the official record.
+        Draft only — review required. The recording (and any manual notes) remains the official record.
         {unclearSegments.length > 0 &&
           ` ${unclearSegments.length} section${unclearSegments.length === 1 ? "" : "s"} flagged unclear — will need QC review.`}
       </p>
@@ -406,7 +413,13 @@ function TranscriptDiagnosticsPanel({
   interimText,
   engineStatus,
   lastTranscriptError,
+  lastSttEvent,
+  sttResultEventCount,
   speechRecognitionSupported,
+  sttConstructorName,
+  secureContext,
+  pageOrigin,
+  userAgent,
   micPermissionStatus,
   currentStepId,
   recordingStatus,
@@ -414,14 +427,24 @@ function TranscriptDiagnosticsPanel({
   sttTestInterim,
   sttTestFinalText,
   sttTestError,
+  sttTestLastEvent,
+  sttTestResultCount,
   onStartSttOnlyTest,
-  onStopSttOnlyTest
+  onStopSttOnlyTest,
+  onClearSttOnlyTest
 }: {
   segments: TranscriptSegment[];
   interimText: string;
   engineStatus: TranscriptEngineStatus;
   lastTranscriptError: string;
+  /** Last raw SpeechRecognition lifecycle event fired for the real recording-flow engine (start/audiostart/soundstart/speechstart/result/speechend/soundend/audioend/nomatch/error/end). */
+  lastSttEvent: string;
+  sttResultEventCount: number;
   speechRecognitionSupported: boolean;
+  sttConstructorName: "SpeechRecognition" | "webkitSpeechRecognition" | "none";
+  secureContext: boolean;
+  pageOrigin: string;
+  userAgent: string;
   micPermissionStatus: PermissionState | "unsupported";
   currentStepId: string;
   recordingStatus: RecordingStatus;
@@ -429,8 +452,11 @@ function TranscriptDiagnosticsPanel({
   sttTestInterim: string;
   sttTestFinalText: string;
   sttTestError: string;
+  sttTestLastEvent: string;
+  sttTestResultCount: number;
   onStartSttOnlyTest: () => void;
   onStopSttOnlyTest: () => void;
+  onClearSttOnlyTest: () => void;
 }) {
   const finalTranscriptText = segments
     .filter((segment) => segment.isFinal && segment.text.trim())
@@ -442,12 +468,24 @@ function TranscriptDiagnosticsPanel({
       <p className="text-sm font-bold">Speech recognition diagnostics</p>
       <Disclosure label="Transcript diagnostics">
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80">
+          <dt className="opacity-60">Secure context</dt>
+          <dd>{secureContext ? "yes" : "no"}</dd>
+          <dt className="opacity-60">Origin</dt>
+          <dd className="break-words">{pageOrigin || "—"}</dd>
+          <dt className="opacity-60">User agent</dt>
+          <dd className="break-words">{userAgent || "—"}</dd>
+          <dt className="opacity-60">SpeechRecognition constructor</dt>
+          <dd>{sttConstructorName}</dd>
           <dt className="opacity-60">Browser STT supported</dt>
           <dd>{speechRecognitionSupported ? "yes" : "no"}</dd>
           <dt className="opacity-60">Engine status</dt>
           <dd>{engineStatus}</dd>
+          <dt className="opacity-60">Last event fired</dt>
+          <dd>{lastSttEvent || "none"}</dd>
           <dt className="opacity-60">Last error</dt>
           <dd>{lastTranscriptError || "none"}</dd>
+          <dt className="opacity-60">Result event count</dt>
+          <dd>{sttResultEventCount}</dd>
           <dt className="opacity-60">Segment count</dt>
           <dd>{segments.length}</dd>
           <dt className="opacity-60">Interim text</dt>
@@ -469,7 +507,7 @@ function TranscriptDiagnosticsPanel({
             QA only — runs SpeechRecognition on its own, without MediaRecorder or the main transcript. Say
             &ldquo;Testing speech recognition for OOXii Assist&rdquo; and confirm the text below updates live.
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {sttTestStatus === "listening" || sttTestStatus === "restarting" ? (
               <SecondaryButton className="px-3 py-1.5 text-xs" onClick={onStopSttOnlyTest}>
                 Stop test
@@ -479,8 +517,17 @@ function TranscriptDiagnosticsPanel({
                 Start STT test
               </SecondaryButton>
             )}
+            <SecondaryButton className="px-3 py-1.5 text-xs" onClick={onClearSttOnlyTest}>
+              Clear
+            </SecondaryButton>
             <StatusBadge label={sttTestStatus} tone={sttTestStatus === "error" ? "danger" : "neutral"} />
           </div>
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80">
+            <dt className="opacity-60">Last event fired</dt>
+            <dd>{sttTestLastEvent || "none"}</dd>
+            <dt className="opacity-60">Result event count</dt>
+            <dd>{sttTestResultCount}</dd>
+          </dl>
           <div className="ink-panel space-y-1 p-2 text-xs">
             <p className="opacity-90">{sttTestFinalText || "No final text yet."}</p>
             {sttTestInterim && <p className="italic opacity-60">…{sttTestInterim}</p>}
@@ -598,14 +645,23 @@ export function RecordingScreen({
   transcriptUnavailableReason,
   transcriptEngineStatus,
   lastTranscriptError,
+  lastSttEvent,
+  sttResultEventCount,
   speechRecognitionSupported,
+  sttConstructorName,
+  secureContext,
+  pageOrigin,
+  userAgent,
   micPermissionStatus,
   sttTestStatus,
   sttTestInterim,
   sttTestFinalText,
   sttTestError,
+  sttTestLastEvent,
+  sttTestResultCount,
   onStartSttOnlyTest,
   onStopSttOnlyTest,
+  onClearSttOnlyTest,
   unclearSegments,
   onMarkUnclear,
   startRecording,
@@ -647,14 +703,23 @@ export function RecordingScreen({
   transcriptUnavailableReason: "browser" | "language" | null;
   transcriptEngineStatus: TranscriptEngineStatus;
   lastTranscriptError: string;
+  lastSttEvent: string;
+  sttResultEventCount: number;
   speechRecognitionSupported: boolean;
+  sttConstructorName: "SpeechRecognition" | "webkitSpeechRecognition" | "none";
+  secureContext: boolean;
+  pageOrigin: string;
+  userAgent: string;
   micPermissionStatus: PermissionState | "unsupported";
   sttTestStatus: TranscriptEngineStatus;
   sttTestInterim: string;
   sttTestFinalText: string;
   sttTestError: string;
+  sttTestLastEvent: string;
+  sttTestResultCount: number;
   onStartSttOnlyTest: () => void;
   onStopSttOnlyTest: () => void;
+  onClearSttOnlyTest: () => void;
   unclearSegments: UnclearSegment[];
   onMarkUnclear: () => void;
   startRecording: () => void;
@@ -671,7 +736,7 @@ export function RecordingScreen({
   const isFirstStep = stepIndex === 0;
   const isLastStep = stepIndex === totalSteps - 1;
   const recordingEverStarted = recording || paused || recordingStatus === "recorded";
-  const recordingLabel = recording && !paused ? "Recording" : recording && paused ? "Paused" : recordingStatus === "recorded" ? "Recorded" : "Not started";
+  const recordingLabel = recording && !paused ? "Recording" : recording && paused ? "Paused" : recordingStatus === "recorded" ? "Audio saved" : "Not started";
   const recordingTone = recording && !paused ? "danger" : recordingStatus === "recorded" ? "good" : "warn";
   const canMarkUnclear = recordingEverStarted && !micError;
 
@@ -921,7 +986,13 @@ export function RecordingScreen({
           interimText={interimText}
           engineStatus={transcriptEngineStatus}
           lastTranscriptError={lastTranscriptError}
+          lastSttEvent={lastSttEvent}
+          sttResultEventCount={sttResultEventCount}
           speechRecognitionSupported={speechRecognitionSupported}
+          sttConstructorName={sttConstructorName}
+          secureContext={secureContext}
+          pageOrigin={pageOrigin}
+          userAgent={userAgent}
           micPermissionStatus={micPermissionStatus}
           currentStepId={step.id}
           recordingStatus={recordingStatus}
@@ -929,8 +1000,11 @@ export function RecordingScreen({
           sttTestInterim={sttTestInterim}
           sttTestFinalText={sttTestFinalText}
           sttTestError={sttTestError}
+          sttTestLastEvent={sttTestLastEvent}
+          sttTestResultCount={sttTestResultCount}
           onStartSttOnlyTest={onStartSttOnlyTest}
           onStopSttOnlyTest={onStopSttOnlyTest}
+          onClearSttOnlyTest={onClearSttOnlyTest}
         />
       )}
 
@@ -971,14 +1045,20 @@ export function RecordingScreen({
 
       <div className="sticky-action-bar flex items-center gap-2">
         <SecondaryButton
-          className="px-3.5 py-2.5 text-sm"
+          className="min-h-[2.75rem] px-3.5 py-2.5 text-sm"
           icon={<AlertTriangle className="h-4 w-4" />}
           onClick={onMarkUnclear}
           disabled={!canMarkUnclear}
         >
           Mark unclear
         </SecondaryButton>
-        <PrimaryButton fullWidth className="py-2.5 text-sm" disabled={!canFinish} icon={<Flag className="h-4 w-4" />} onClick={handleFinish}>
+        <PrimaryButton
+          fullWidth
+          className="min-h-[2.75rem] py-2.5 text-sm"
+          disabled={!canFinish}
+          icon={<Flag className="h-4 w-4" />}
+          onClick={handleFinish}
+        >
           Finish &amp; review transcript
         </PrimaryButton>
       </div>

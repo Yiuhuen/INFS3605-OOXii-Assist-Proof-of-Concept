@@ -25,6 +25,15 @@ export function isSpeechRecognitionSupported(): boolean {
   return getSpeechRecognitionConstructor() !== null;
 }
 
+/** Which global the engine actually resolved — surfaced in the dev diagnostics panel instead of a bare yes/no, since Safari/older Chrome only expose the vendor-prefixed form. */
+export function getSpeechRecognitionConstructorName(): "SpeechRecognition" | "webkitSpeechRecognition" | "none" {
+  if (typeof window === "undefined") return "none";
+  const w = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
+  if (w.SpeechRecognition) return "SpeechRecognition";
+  if (w.webkitSpeechRecognition) return "webkitSpeechRecognition";
+  return "none";
+}
+
 /** One recognized chunk from a single onresult event, already unpacked from the raw SpeechRecognitionEvent. */
 export interface RecognitionResultChunk {
   transcript: string;
@@ -33,12 +42,35 @@ export interface RecognitionResultChunk {
   isFinal: boolean;
 }
 
+/** The full SpeechRecognition event lifecycle — every one of these can be individually diagnosed via onLifecycleEvent below, so a dev debugging a missed word can see exactly which stage the engine reached (e.g. "onspeechstart fired but onresult never did" points at recognition quality, not app wiring). */
+export type RecognitionLifecycleEvent =
+  | "start"
+  | "audiostart"
+  | "soundstart"
+  | "speechstart"
+  | "result"
+  | "speechend"
+  | "soundend"
+  | "audioend"
+  | "nomatch"
+  | "error"
+  | "end";
+
 export interface RealSpeechRecognitionCallbacks {
   onStart?: () => void;
+  onAudioStart?: () => void;
+  onSoundStart?: () => void;
+  onSpeechStart?: () => void;
   /** Fires once per onresult event with only the newly changed chunks (event.resultIndex..event.results.length). */
   onResult?: (chunks: RecognitionResultChunk[]) => void;
+  onSpeechEnd?: () => void;
+  onSoundEnd?: () => void;
+  onAudioEnd?: () => void;
+  onNoMatch?: () => void;
   onError?: (errorCode: string) => void;
   onEnd?: () => void;
+  /** Fires alongside every specific callback above — a single feed for diagnostics UIs that just want "what was the last thing the engine did". */
+  onLifecycleEvent?: (event: RecognitionLifecycleEvent) => void;
 }
 
 export interface RealSpeechRecognitionController {
@@ -90,6 +122,48 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
   recognition.onstart = () => {
     debugLog("onstart");
     callbacks.onStart?.();
+    callbacks.onLifecycleEvent?.("start");
+  };
+
+  // These four fire in order as the engine actually detects audio/voice —
+  // none of them touch transcript text, but seeing which ones fired (or
+  // didn't) is exactly how you tell "the mic never picked up sound" apart
+  // from "sound arrived but the engine couldn't recognise words" apart from
+  // "words were recognised but the app dropped them".
+  recognition.onaudiostart = () => {
+    debugLog("onaudiostart");
+    callbacks.onAudioStart?.();
+    callbacks.onLifecycleEvent?.("audiostart");
+  };
+  recognition.onsoundstart = () => {
+    debugLog("onsoundstart");
+    callbacks.onSoundStart?.();
+    callbacks.onLifecycleEvent?.("soundstart");
+  };
+  recognition.onspeechstart = () => {
+    debugLog("onspeechstart");
+    callbacks.onSpeechStart?.();
+    callbacks.onLifecycleEvent?.("speechstart");
+  };
+  recognition.onspeechend = () => {
+    debugLog("onspeechend");
+    callbacks.onSpeechEnd?.();
+    callbacks.onLifecycleEvent?.("speechend");
+  };
+  recognition.onsoundend = () => {
+    debugLog("onsoundend");
+    callbacks.onSoundEnd?.();
+    callbacks.onLifecycleEvent?.("soundend");
+  };
+  recognition.onaudioend = () => {
+    debugLog("onaudioend");
+    callbacks.onAudioEnd?.();
+    callbacks.onLifecycleEvent?.("audioend");
+  };
+  recognition.onnomatch = () => {
+    debugLog("onnomatch");
+    callbacks.onNoMatch?.();
+    callbacks.onLifecycleEvent?.("nomatch");
   };
 
   recognition.onresult = (event: any) => {
@@ -102,12 +176,14 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
     }
     debugLog("onresult", chunks);
     callbacks.onResult?.(chunks);
+    callbacks.onLifecycleEvent?.("result");
   };
 
   recognition.onerror = (event: any) => {
     const code: string = event?.error ?? "unknown";
     debugLog("onerror", code);
     callbacks.onError?.(code);
+    callbacks.onLifecycleEvent?.("error");
     if (FATAL_RECOGNITION_ERRORS.has(code)) {
       fatalError = true;
       active = false;
@@ -119,6 +195,7 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
     debugLog("onend", { active, fatalError });
     clearRestartTimer();
     callbacks.onEnd?.();
+    callbacks.onLifecycleEvent?.("end");
     if (!active || fatalError) return;
     restartTimer = setTimeout(() => {
       if (!active || fatalError) return;

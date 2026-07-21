@@ -1,5 +1,11 @@
 import type { LanguageCode } from "./types";
-import { createRealSpeechRecognition, getSpeechRecognitionConstructor, isSpeechRecognitionSupported } from "./realSpeechRecognition";
+import {
+  createRealSpeechRecognition,
+  getSpeechRecognitionConstructor,
+  getSpeechRecognitionConstructorName,
+  isSpeechRecognitionSupported,
+  type RecognitionLifecycleEvent
+} from "./realSpeechRecognition";
 
 /**
  * ---------------------------------------------------------------------------
@@ -41,7 +47,7 @@ export function mockTranslateToEnglish(rawText: string, language: LanguageCode):
     .join("\n");
 }
 
-export { getSpeechRecognitionConstructor };
+export { getSpeechRecognitionConstructor, getSpeechRecognitionConstructorName, type RecognitionLifecycleEvent };
 
 export function isBrowserRecognitionAvailable(): boolean {
   return isSpeechRecognitionSupported();
@@ -57,6 +63,8 @@ export interface LiveTranscriptHandlers {
   onStatusChange?: (status: TranscriptEngineStatus) => void;
   /** Raw SpeechRecognition error code (e.g. "not-allowed", "network", "no-speech") — surfaced for the dev diagnostics panel and to drive the unavailable fallback, instead of being silently swallowed. */
   onError?: (errorCode: string) => void;
+  /** Every lifecycle event the raw engine fires (start/audiostart/soundstart/speechstart/result/speechend/soundend/audioend/nomatch/error/end) — dev diagnostics only, so a missed word can be traced to the stage it was lost at. */
+  onLifecycleEvent?: (event: RecognitionLifecycleEvent) => void;
 }
 
 export interface LiveTranscriptController {
@@ -111,7 +119,8 @@ export function createBrowserRecognitionController(
         return;
       }
       handlers.onStatusChange?.("restarting");
-    }
+    },
+    onLifecycleEvent: handlers.onLifecycleEvent
   });
 
   if (!engine) return null;

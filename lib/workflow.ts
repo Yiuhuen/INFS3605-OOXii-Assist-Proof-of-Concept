@@ -27,9 +27,6 @@ export interface WorkflowState {
   recordingStage: "not_started" | "in_progress" | "finished";
   /** True once the transcript has been reviewed and fields extracted (Transcript Review → Captured Fields). */
   transcriptReviewed: boolean;
-  recordsNeedingQc: number;
-  recordsPendingSync: number;
-  totalRecords: number;
 }
 
 export interface NextAction {
@@ -77,28 +74,10 @@ export function getNextAction(state: WorkflowState): NextAction {
   }
 
   if (!state.hasActiveClient) {
-    // Between clients: surface a QC/export backlog before offering a new
-    // client, but never let it block starting one — see requirement 10.
-    if (state.recordsNeedingQc > 0) {
-      return {
-        label: "Open QC review",
-        subtitle: `${state.recordsNeedingQc} record${state.recordsNeedingQc === 1 ? " needs" : "s need"} QC before export.`,
-        targetScreen: "qc",
-        urgency: "urgent",
-        stepId: "save"
-      };
-    }
-
-    if (state.totalRecords > 0) {
-      return {
-        label: "Export records",
-        subtitle: "Records are ready. Export for reporting.",
-        targetScreen: "export",
-        urgency: "normal",
-        stepId: "save"
-      };
-    }
-
+    // Between clients, the tester must always be able to start the next one —
+    // any QC/export backlog is surfaced as a badge on Home and stays one tap
+    // away via More, but it must never occupy the single primary action, or
+    // the field loop (test client after client) stalls after the first save.
     return {
       label: "Start new anonymous client",
       subtitle: "Create a non-personal client ID and begin the guided test.",

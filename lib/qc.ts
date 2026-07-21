@@ -211,38 +211,81 @@ export function recordNeedsQc(record: TestRecord) {
   );
 }
 
-export function qcReasons(record: TestRecord): string[] {
-  if (record.qc_status === "Approved") return ["QC complete"];
-  const reasons: string[] = [];
-  if (recordingIncomplete(record)) reasons.push(`Recording ${record.recording_status.replace("_", " ")}`);
-  if (record.recording_status === "recorded" && !record.raw_transcript_text.trim()) reasons.push("Audio recorded but no transcript captured");
-  if (isLowConfidence(record)) reasons.push("Low confidence");
-  if (hasMissingFields(record)) reasons.push("Missing fields");
-  if (record.edited_by_user) reasons.push("Edited by tester");
-  if (hasUnclearSegments(record)) reasons.push(`${record.unclear_segments.length} unclear section${record.unclear_segments.length === 1 ? "" : "s"}`);
-  if (record.has_unvisited_prompts) reasons.push("Prompt(s) not shown");
-  if (record.sync_status === "Pending sync") reasons.push("Pending sync");
-  if (record.sync_status === "Failed") reasons.push("Sync failed");
+/** The four groups QC reasons render under — keeps a badge-heavy record from becoming a wall of undifferentiated chips (see components/screens/QcScreen.tsx). */
+export type QcReasonCategory = "Transcript quality" | "Missing & edited fields" | "Recording & manual fallback" | "Sync & export status";
+
+const QC_REASON_CATEGORY_ORDER: QcReasonCategory[] = [
+  "Transcript quality",
+  "Missing & edited fields",
+  "Recording & manual fallback",
+  "Sync & export status"
+];
+
+interface CategorizedQcReason {
+  category: QcReasonCategory;
+  reason: string;
+}
+
+function buildCategorizedQcReasons(record: TestRecord): CategorizedQcReason[] {
+  if (record.qc_status === "Approved") return [{ category: "Sync & export status", reason: "QC complete" }];
+  const reasons: CategorizedQcReason[] = [];
+
+  if (recordingIncomplete(record)) {
+    reasons.push({ category: "Recording & manual fallback", reason: `Recording ${record.recording_status.replace("_", " ")}` });
+  }
+  if (record.recording_status === "recorded" && !record.raw_transcript_text.trim()) {
+    reasons.push({ category: "Recording & manual fallback", reason: "Audio recorded but no transcript captured" });
+  }
+  if (hasUnclearSegments(record)) {
+    reasons.push({
+      category: "Recording & manual fallback",
+      reason: `${record.unclear_segments.length} unclear section${record.unclear_segments.length === 1 ? "" : "s"}`
+    });
+  }
+  if (record.has_unvisited_prompts) reasons.push({ category: "Recording & manual fallback", reason: "Prompt(s) not shown" });
+
+  if (isLowConfidence(record)) reasons.push({ category: "Missing & edited fields", reason: "Low confidence" });
+  if (hasMissingFields(record)) reasons.push({ category: "Missing & edited fields", reason: "Missing fields" });
+  if (record.edited_by_user) reasons.push({ category: "Missing & edited fields", reason: "Edited by tester" });
 
   for (const flag of record.transcript_quality_flags) {
     if (flag.type === "possible_misrecognition" && flag.suggestedText) {
-      reasons.push(`Possible STT misrecognition: '${flag.originalText}' may mean '${flag.suggestedText}'`);
+      reasons.push({ category: "Transcript quality", reason: `Possible STT misrecognition: '${flag.originalText}' may mean '${flag.suggestedText}'` });
     }
   }
   if (record.transcript_quality_flags.some((flag) => flag.type === "ambiguous_negation")) {
-    reasons.push('Negation ambiguity: \'can see\' vs \'cannot see\'');
+    reasons.push({ category: "Transcript quality", reason: "Negation ambiguity: 'can see' vs 'cannot see'" });
   }
   if (record.transcript_quality_flags.some((flag) => flag.type === "clinical_contradiction")) {
-    reasons.push("Eye-side ambiguity detected");
+    reasons.push({ category: "Transcript quality", reason: "Eye-side ambiguity detected" });
   }
-  if (record.translation_review_required) reasons.push("Translation requires review");
+  if (record.translation_review_required) reasons.push({ category: "Transcript quality", reason: "Translation requires review" });
   if (record.corrections_applied.some((correction) => correction.affectsClinicalMeaning)) {
-    reasons.push("Clinical field edited after transcript review");
+    reasons.push({ category: "Transcript quality", reason: "Clinical field edited after transcript review" });
   }
-  if (record.extraction_safety_status === "draft_review_required") reasons.push("Draft extraction — requires review");
+  if (record.extraction_safety_status === "draft_review_required") {
+    reasons.push({ category: "Transcript quality", reason: "Draft extraction — requires review" });
+  }
 
-  if (record.qc_status === "Unreviewed") reasons.push("Unreviewed");
+  if (record.sync_status === "Pending sync") reasons.push({ category: "Sync & export status", reason: "Pending sync" });
+  if (record.sync_status === "Failed") reasons.push({ category: "Sync & export status", reason: "Sync failed" });
+  if (record.qc_status === "Unreviewed") reasons.push({ category: "Sync & export status", reason: "Unreviewed" });
+
   return reasons;
+}
+
+/** Flat list — same reasons as qcReasonGroups, just without category grouping. Kept for any caller that only needs the plain text. */
+export function qcReasons(record: TestRecord): string[] {
+  return buildCategorizedQcReasons(record).map((item) => item.reason);
+}
+
+/** Grouped for display — see components/screens/QcScreen.tsx, which renders each non-empty group under its own short header instead of one undifferentiated badge row. */
+export function qcReasonGroups(record: TestRecord): Array<{ category: QcReasonCategory; reasons: string[] }> {
+  const categorized = buildCategorizedQcReasons(record);
+  return QC_REASON_CATEGORY_ORDER.map((category) => ({
+    category,
+    reasons: categorized.filter((item) => item.category === category).map((item) => item.reason)
+  })).filter((group) => group.reasons.length > 0);
 }
 
 export function filterRecords(records: TestRecord[], filter: QcFilter): TestRecord[] {

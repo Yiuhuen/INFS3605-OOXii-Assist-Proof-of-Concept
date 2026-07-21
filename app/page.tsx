@@ -28,9 +28,11 @@ import { applyDisplaySettings, loadDisplaySettings, saveDisplaySettings, type Di
 import {
   createBrowserRecognitionController,
   getSpeechRecognitionConstructor,
+  getSpeechRecognitionConstructorName,
   isLiveTranscriptSupportedLanguage,
   mockTranslateToEnglish,
   type LiveTranscriptController,
+  type RecognitionLifecycleEvent,
   type TranscriptEngineStatus
 } from "@/lib/liveTranscript";
 import type { InsightTargetPage } from "@/lib/insights";
@@ -156,14 +158,25 @@ export default function Home() {
   const [transcriptUnavailableReason, setTranscriptUnavailableReason] = useState<"browser" | "language" | null>(null);
   const [transcriptEngineStatus, setTranscriptEngineStatus] = useState<TranscriptEngineStatus>("idle");
   const [lastTranscriptError, setLastTranscriptError] = useState("");
+  /** Last SpeechRecognition lifecycle event fired for the real recording-flow engine (start/audiostart/soundstart/speechstart/result/speechend/soundend/audioend/nomatch/error/end) — dev diagnostics only. */
+  const [lastSttEvent, setLastSttEvent] = useState("");
+  /** Count of onresult events fired for the real recording-flow engine — distinct from transcriptSegments.length, since one onresult can carry interim-only chunks that never become a saved segment. */
+  const [sttResultEventCount, setSttResultEventCount] = useState(0);
   const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(false);
   /** Feature-detected via navigator.permissions — "unsupported" on browsers (e.g. Safari) that don't expose the Permissions API for "microphone". Dev diagnostics only. */
   const [micPermissionStatus, setMicPermissionStatus] = useState<PermissionState | "unsupported">("unsupported");
+  /** Environment facts for the dev diagnostics panel — SpeechRecognition silently refuses to run outside a secure context, so this is often the actual root cause of "it just doesn't work". Computed once on mount (browser-only). */
+  const [secureContext, setSecureContext] = useState(false);
+  const [pageOrigin, setPageOrigin] = useState("");
+  const [userAgent, setUserAgent] = useState("");
+  const [sttConstructorName, setSttConstructorName] = useState<"SpeechRecognition" | "webkitSpeechRecognition" | "none">("none");
   /** Standalone "Test speech recognition only" diagnostic — runs SpeechRecognition without MediaRecorder or touching the real transcript state. QA/dev use only. */
   const [sttTestStatus, setSttTestStatus] = useState<TranscriptEngineStatus>("idle");
   const [sttTestInterim, setSttTestInterim] = useState("");
   const [sttTestFinalText, setSttTestFinalText] = useState("");
   const [sttTestError, setSttTestError] = useState("");
+  const [sttTestLastEvent, setSttTestLastEvent] = useState("");
+  const [sttTestResultCount, setSttTestResultCount] = useState(0);
   const [promptMarkers, setPromptMarkers] = useState<PromptMarker[]>([]);
   const [unclearSegments, setUnclearSegments] = useState<UnclearSegment[]>([]);
   const [rawTranscriptLanguage, setRawTranscriptLanguage] = useState<LanguageCode>("en");
@@ -208,6 +221,10 @@ export default function Home() {
     setRecords(loadRecords());
     setBrowserOnline(navigator.onLine);
     setSpeechRecognitionSupported(getSpeechRecognitionConstructor() !== null);
+    setSttConstructorName(getSpeechRecognitionConstructorName());
+    setSecureContext(window.isSecureContext);
+    setPageOrigin(window.location.origin);
+    setUserAgent(navigator.userAgent);
     const settings = loadDisplaySettings();
     setDisplaySettings(settings);
     applyDisplaySettings(settings);
@@ -286,6 +303,15 @@ export default function Home() {
       setScreen(tester.preferred_language ? (tester.is_new_tester ? "language" : "dashboard") : "language");
     }
   }, [authMode, screen, tester.is_new_tester, tester.preferred_language]);
+
+  // This is a single-page app — screens are conditional renders, not route
+  // changes, so the browser never resets scroll position on its own. Without
+  // this, a screen reached while scrolled down on the previous one (e.g.
+  // "Start recording" at the bottom of the client form) renders already
+  // scrolled past its own header/prompt.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [screen]);
 
   useEffect(() => {
     if (screen !== "recording") {
@@ -449,10 +475,7 @@ export default function Home() {
     trainingComplete: !tester.is_new_tester,
     hasActiveClient: hasDraftClient,
     recordingStage,
-    transcriptReviewed: extracted !== null,
-    recordsNeedingQc,
-    recordsPendingSync,
-    totalRecords: records.length
+    transcriptReviewed: extracted !== null
   });
 
   function updateTester(next: Tester) {
@@ -601,6 +624,8 @@ export default function Home() {
     setTranscriptUnavailable(false);
     setTranscriptUnavailableReason(null);
     setLastTranscriptError("");
+    setLastSttEvent("");
+    setSttResultEventCount(0);
 
     if (!isLiveTranscriptSupportedLanguage(language)) {
       // No real recognizer for this language in the PoC — never simulate
@@ -641,6 +666,10 @@ export default function Home() {
           setTranscriptUnavailable(true);
           setTranscriptUnavailableReason("browser");
         }
+      },
+      onLifecycleEvent: (event: RecognitionLifecycleEvent) => {
+        setLastSttEvent(event);
+        if (event === "result") setSttResultEventCount((count) => count + 1);
       }
     };
 
@@ -668,6 +697,8 @@ export default function Home() {
     setSttTestInterim("");
     setSttTestFinalText("");
     setSttTestError("");
+    setSttTestLastEvent("");
+    setSttTestResultCount(0);
     const controller = createBrowserRecognitionController({
       onInterim: (text) => setSttTestInterim(text),
       onFinal: (text) => {
@@ -676,7 +707,11 @@ export default function Home() {
         setSttTestFinalText((prev) => (prev ? `${prev} ${text.trim()}` : text.trim()));
       },
       onStatusChange: (status) => setSttTestStatus(status),
-      onError: (errorCode) => setSttTestError(errorCode)
+      onError: (errorCode) => setSttTestError(errorCode),
+      onLifecycleEvent: (event) => {
+        setSttTestLastEvent(event);
+        if (event === "result") setSttTestResultCount((count) => count + 1);
+      }
     });
     if (!controller) {
       setSttTestStatus("error");
@@ -684,6 +719,9 @@ export default function Home() {
       return;
     }
     sttTestControllerRef.current = controller;
+    // Called directly here, synchronously, inside this click handler — no
+    // await/setTimeout in between — so the browser always credits the
+    // resulting mic-permission prompt to the tap that triggered it.
     controller.start();
   }
 
@@ -692,6 +730,16 @@ export default function Home() {
     sttTestControllerRef.current = null;
     setSttTestInterim("");
     setSttTestStatus("stopped");
+  }
+
+  /** Resets the standalone STT test's displayed state without starting/stopping the engine — lets a dev clear a previous run's transcript/error/event trail before trying again. */
+  function clearSttOnlyTest() {
+    setSttTestInterim("");
+    setSttTestFinalText("");
+    setSttTestError("");
+    setSttTestLastEvent("");
+    setSttTestResultCount(0);
+    if (sttTestStatus === "error" || sttTestStatus === "stopped") setSttTestStatus("idle");
   }
 
   function stopLiveTranscript() {
@@ -715,6 +763,15 @@ export default function Home() {
   }
 
   async function startRecording() {
+    // SpeechRecognition is started synchronously here, as the very first
+    // thing this click handler does — before the awaited getUserMedia()
+    // call below. MediaRecorder needs that await to get its stream, but
+    // SpeechRecognition doesn't depend on it at all, and calling it *after*
+    // an await risks the browser no longer crediting a user gesture to the
+    // call on stricter engines. Starting it first also means speech spoken
+    // in the first instant of "Start recording" (e.g. an immediate "hello,
+    // hello") is never missed waiting on the mic-permission round trip.
+    startLiveTranscript();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -737,8 +794,12 @@ export default function Home() {
       setRecordingStartedAt((prev) => prev || new Date().toISOString());
       startElapsedTimer();
       addPromptMarker(currentStep, currentStepIndex, "start");
-      startLiveTranscript();
     } catch {
+      // getUserMedia was denied/unavailable — MediaRecorder can't run, and
+      // in practice neither can SpeechRecognition (browsers gate both under
+      // the same microphone permission), so the optimistically-started
+      // engine above is stopped rather than left listening uselessly.
+      stopLiveTranscript();
       const timestamp = new Date().toISOString();
       setMicFailureAt(timestamp);
       const placeholder = new Blob([`Recording unavailable at ${timestamp}. Microphone access failed or was denied.`], { type: "text/plain" });
@@ -1394,14 +1455,23 @@ export default function Home() {
           transcriptUnavailableReason={transcriptUnavailableReason}
           transcriptEngineStatus={transcriptEngineStatus}
           lastTranscriptError={lastTranscriptError}
+          lastSttEvent={lastSttEvent}
+          sttResultEventCount={sttResultEventCount}
           speechRecognitionSupported={speechRecognitionSupported}
+          sttConstructorName={sttConstructorName}
+          secureContext={secureContext}
+          pageOrigin={pageOrigin}
+          userAgent={userAgent}
           micPermissionStatus={micPermissionStatus}
           sttTestStatus={sttTestStatus}
           sttTestInterim={sttTestInterim}
           sttTestFinalText={sttTestFinalText}
           sttTestError={sttTestError}
+          sttTestLastEvent={sttTestLastEvent}
+          sttTestResultCount={sttTestResultCount}
           onStartSttOnlyTest={startSttOnlyTest}
           onStopSttOnlyTest={stopSttOnlyTest}
+          onClearSttOnlyTest={clearSttOnlyTest}
           unclearSegments={unclearSegments}
           onMarkUnclear={markSectionUnclear}
           startRecording={startRecording}

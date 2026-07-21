@@ -123,7 +123,7 @@ export function InsightsScreen({
       )}
 
       <SecondaryButton fullWidth onClick={onBack}>
-        Back to dashboard
+        Back to Home
       </SecondaryButton>
     </section>
   );

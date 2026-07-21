@@ -1,9 +1,10 @@
 "use client";
 
 import { Save, ShieldAlert, Zap } from "lucide-react";
-import type { ExtractedFields, ExtractionSafetyStatus, ProcessingStatus } from "@/lib/types";
+import type { ExtractedFields, ExtractionSafetyStatus, FieldConfidenceLevel, ManualExtractedFields, ProcessingStatus } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
-import { InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard } from "@/components/ui";
+import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
+import { InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard, type BadgeTone } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confidence_score" | "field_confidence">, string> = {
@@ -15,6 +16,21 @@ const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confi
   cataract_history_confirmed: "Cataract history confirmed",
   current_glasses: "Current glasses",
   additional_notes: "Additional notes"
+};
+
+const HIGH_RISK_FIELD_SET = new Set<string>(HIGH_RISK_EXTRACTED_FIELDS);
+
+const SOURCE_LABELS: Record<"manual" | "transcript" | "corrected_transcript", string> = {
+  manual: "Manual entry",
+  transcript: "Transcript",
+  corrected_transcript: "Corrected transcript"
+};
+
+const CONFIDENCE_TONE: Record<FieldConfidenceLevel, BadgeTone> = {
+  high: "good",
+  medium: "neutral",
+  low: "warn",
+  unknown: "warn"
 };
 
 export function CapturedFieldsScreen({
@@ -54,7 +70,8 @@ export function CapturedFieldsScreen({
           Capture confidence: {Math.round(effective.confidence_score * 100)}%
         </span>
         {editedFields && <StatusBadge label="Edited — verify in QC" tone="warn" />}
-        {qcRequired && <StatusBadge label="Needs QC" tone="danger" />}
+        {/* processingStatusLabel already reads "Needs QC" in danger tone once processingStatus is "needs_qc" — only add this badge when it says something else (e.g. a not-yet-processed draft) so the same risk isn't shown twice. */}
+        {qcRequired && processingStatus !== "needs_qc" && <StatusBadge label="Needs QC" tone="danger" />}
       </div>
 
       {extractionSafetyStatus === "draft_review_required" && (
@@ -69,15 +86,14 @@ export function CapturedFieldsScreen({
       <div className="space-y-4">
         {(Object.keys(FIELD_LABELS) as Array<keyof typeof FIELD_LABELS>).map((key) => {
           const missing = effective.missing_fields.includes(key);
-          const fieldMeta = effective.field_confidence?.[key];
+          const fieldMeta = effective.field_confidence?.[key as keyof ManualExtractedFields];
           const flagConfidence = fieldMeta && (fieldMeta.confidence === "low" || fieldMeta.confidence === "unknown");
+          const isHighRisk = HIGH_RISK_FIELD_SET.has(key);
           return (
             <label key={key} className={`block ${missing || flagConfidence ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}`}>
               <span className="field-label flex flex-wrap items-center gap-2">
                 {FIELD_LABELS[key]}
-                {fieldMeta && flagConfidence && (
-                  <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone="warn" />
-                )}
+                {isHighRisk && <StatusBadge label="High-risk field" tone="neutral" icon={<ShieldAlert className="h-3.5 w-3.5" />} />}
               </span>
               <input
                 className="field-input"
@@ -85,6 +101,11 @@ export function CapturedFieldsScreen({
                 placeholder={missing ? "Not captured" : undefined}
                 onChange={(event) => onEditField(key, event.target.value)}
               />
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                {fieldMeta && <StatusBadge label={`Source: ${SOURCE_LABELS[fieldMeta.source]}`} tone="neutral" />}
+                {fieldMeta && <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />}
+                {fieldMeta?.requiresReview && <StatusBadge label="Review required" tone="warn" />}
+              </div>
               {fieldMeta?.reason && flagConfidence && <p className="mt-1 text-xs opacity-60">{fieldMeta.reason}</p>}
             </label>
           );

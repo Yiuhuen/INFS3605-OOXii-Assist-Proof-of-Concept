@@ -53,7 +53,11 @@ export function Dashboard({
   ].filter(Boolean);
 
   return (
-    <section className="flex min-h-[calc(100vh-3rem)] flex-col">
+    // Content flows top-down with fixed, calm spacing — no full-viewport
+    // stretch. Stretching previously centred the CTA with ~300px voids above
+    // and below it on tall phones, which read as an unfinished screen rather
+    // than a deliberate single-action layout.
+    <section>
       <div className="mb-8 flex items-start justify-between gap-3">
         <BrandLogo size="small" />
         <button
@@ -85,14 +89,14 @@ export function Dashboard({
         <WorkflowProgressRow currentStep={nextAction.stepId} />
       </div>
 
-      <div className="flex flex-1 flex-col justify-center">
+      <div className="mt-10">
         <p className="mb-2 text-center text-sm opacity-70">{nextAction.subtitle}</p>
-        <PrimaryButton fullWidth icon={<ArrowRight className="h-5 w-5" />} onClick={onNextAction}>
+        <PrimaryButton fullWidth className="py-4 text-lg" icon={<ArrowRight className="h-5 w-5" />} onClick={onNextAction}>
           {nextAction.label}
         </PrimaryButton>
       </div>
 
-      <div className="mt-8 space-y-3">
+      <div className="mt-10 space-y-3">
         <SecondaryButton fullWidth icon={<MoreHorizontal className="h-4 w-4" />} onClick={onMore}>
           More
         </SecondaryButton>

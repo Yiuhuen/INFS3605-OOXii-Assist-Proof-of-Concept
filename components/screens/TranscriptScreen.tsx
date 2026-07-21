@@ -14,7 +14,7 @@ import type {
   UnclearSegment
 } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
-import { Disclosure, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard, type BadgeTone } from "@/components/ui";
+import { Disclosure, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, type BadgeTone } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 const FLAG_TYPE_LABELS: Record<TranscriptQualityFlagType, string> = {
@@ -26,6 +26,27 @@ const FLAG_TYPE_LABELS: Record<TranscriptQualityFlagType, string> = {
   clinical_contradiction: "Eye-side ambiguity",
   unclear_segment: "Unclear segment"
 };
+
+/** Groups quality alerts into the six categories a tester scans for, so the list reads as a short scan instead of one undifferentiated wall of cards. */
+const ALERT_GROUP_LABELS: Record<TranscriptQualityFlagType, string> = {
+  possible_misrecognition: "Possible misrecognition",
+  ambiguous_negation: "Meaning risk",
+  clinical_contradiction: "Eye-side risk",
+  translation_uncertain: "Translation review",
+  low_confidence: "Low confidence",
+  missing_expected_term: "Missing expected terms",
+  unclear_segment: "Unclear segment"
+};
+
+const ALERT_GROUP_ORDER: TranscriptQualityFlagType[] = [
+  "possible_misrecognition",
+  "ambiguous_negation",
+  "clinical_contradiction",
+  "translation_uncertain",
+  "low_confidence",
+  "missing_expected_term",
+  "unclear_segment"
+];
 
 const REVIEW_STATUS_LABELS: Record<TranscriptReviewStatus, string> = {
   not_reviewed: "Not reviewed",
@@ -175,25 +196,23 @@ export function TranscriptScreen({
 }) {
   const allFlags = [...qualityReport.flags, ...translationReport.flags];
   const correctionsByFlagId = new Map(qualityReport.suggestedCorrections.map((correction) => [correction.relatedFlagId, correction]));
+  const alertGroups = ALERT_GROUP_ORDER.map((type) => ({
+    type,
+    label: ALERT_GROUP_LABELS[type],
+    flags: allFlags.filter((flag) => flag.type === type)
+  })).filter((group) => group.flags.length > 0);
+  // Showing the same text twice (once as "raw", once as "English processing
+  // copy") for an English-language record adds nothing — only show this
+  // panel when it's an actual translation-review artifact for a non-English
+  // record, i.e. when it genuinely differs from the raw transcript.
+  const showEnglishProcessingCopy = translationReport.isTranslation || englishProcessingTranscript.trim() !== rawTranscript.trim();
+  const hasRecordingNotes = Boolean(manualOverrideReason.trim()) || canGenerateDraft || unclearSegments.length > 0 || missingPromptLabels.length > 0;
+
   return (
     <section>
       <ScreenHeader title="Review transcript" subtitle={clientId} onBack={onBack} isOnline={isOnline} />
 
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <StatusBadge label={processingStatusLabel(processingStatus)} tone={processingStatusTone(processingStatus)} />
-        {needsQc && <StatusBadge label="Needs QC" tone="danger" icon={<AlertTriangle className="h-3.5 w-3.5" />} />}
-        <StatusBadge label={`Review: ${REVIEW_STATUS_LABELS[reviewStatus]}`} tone={REVIEW_STATUS_TONES[reviewStatus]} />
-      </div>
-
-      {manualOverrideReason.trim() && (
-        <div className="mb-5">
-          <WarningCard>
-            <strong className="font-bold">Manual override reason:</strong> {manualOverrideReason.trim()}
-          </WarningCard>
-        </div>
-      )}
-
-      <div className="field-card mb-5">
+      <div className="field-card mb-4">
         <div className="flex items-center justify-between">
           <p className="font-bold">Audio record</p>
           <StatusBadge label={formatDuration(recordingDurationSeconds)} tone="neutral" />
@@ -205,54 +224,71 @@ export function TranscriptScreen({
         )}
       </div>
 
-      {canGenerateDraft && (
-        <div className="mb-5">
-          <WarningCard>
-            Audio recorded, but no live transcript segments were captured. Please add a manual transcript or continue
-            with QC review.
-          </WarningCard>
-          <SecondaryButton fullWidth className="mt-2" icon={<RefreshCw className="h-4 w-4" />} onClick={onGenerateDraft}>
-            Generate transcript from captured draft
-          </SecondaryButton>
+      <p className="mb-3 text-sm font-bold opacity-90">Draft transcript — review required.</p>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <StatusBadge label={processingStatusLabel(processingStatus)} tone={processingStatusTone(processingStatus)} />
+        {/* processingStatusLabel already reads "Needs QC" once processingStatus is "needs_qc" — only repeat it here when the transcript isn't captured yet, so the same risk isn't shown twice. */}
+        {needsQc && processingStatus !== "needs_qc" && (
+          <StatusBadge label="Needs QC" tone="danger" icon={<AlertTriangle className="h-3.5 w-3.5" />} />
+        )}
+        <StatusBadge label={`Review: ${REVIEW_STATUS_LABELS[reviewStatus]}`} tone={REVIEW_STATUS_TONES[reviewStatus]} />
+      </div>
+
+      {hasRecordingNotes && (
+        <div className="field-card mb-5 space-y-2 text-sm">
+          <p className="text-xs font-bold uppercase tracking-wide text-field-muted">Recording notes</p>
+          {manualOverrideReason.trim() && (
+            <p className="opacity-80">
+              <span className="font-bold">Manual override:</span> {manualOverrideReason.trim()}
+            </p>
+          )}
+          {canGenerateDraft && (
+            <div>
+              <p className="opacity-80">Audio recorded, but no live transcript segments were captured.</p>
+              <SecondaryButton className="mt-1.5" icon={<RefreshCw className="h-4 w-4" />} onClick={onGenerateDraft}>
+                Generate transcript from captured draft
+              </SecondaryButton>
+            </div>
+          )}
+          {unclearSegments.length > 0 && (
+            <p className="opacity-80">
+              {unclearSegments.length} section{unclearSegments.length === 1 ? "" : "s"} flagged unclear during recording — verify
+              against the audio in QC.
+            </p>
+          )}
+          {missingPromptLabels.length > 0 && (
+            <p className="opacity-80">
+              {missingPromptLabels.length} prompt{missingPromptLabels.length === 1 ? "" : "s"} never shown — flagged for QC:{" "}
+              {missingPromptLabels.join(" · ")}
+            </p>
+          )}
         </div>
       )}
 
-      {unclearSegments.length > 0 && (
-        <div className="mb-5">
-          <WarningCard>
-            {unclearSegments.length} section{unclearSegments.length === 1 ? "" : "s"} flagged unclear during recording — verify
-            against the audio during QC.
-          </WarningCard>
-        </div>
-      )}
-
-      {missingPromptLabels.length > 0 && (
-        <div className="mb-5">
-          <WarningCard>
-            {missingPromptLabels.length} prompt{missingPromptLabels.length === 1 ? "" : "s"} never shown during recording — flagged
-            for QC: {missingPromptLabels.join(" · ")}
-          </WarningCard>
-        </div>
-      )}
-
-      {allFlags.length > 0 && (
-        <div className="mb-5 space-y-3">
+      {alertGroups.length > 0 && (
+        <div className="mb-5 space-y-4">
           <p className="text-xs font-bold uppercase tracking-wide text-field-muted">
             Quality alerts — draft transcript, review required ({allFlags.length})
           </p>
-          {allFlags.map((flag) => (
-            <QualityFlagCard
-              key={flag.id}
-              flag={flag}
-              correction={correctionsByFlagId.get(flag.id)}
-              isIgnored={ignoredFlagIds.includes(flag.id)}
-              onApply={() => {
-                const correction = correctionsByFlagId.get(flag.id);
-                if (correction) onApplyCorrection(correction);
-              }}
-              onIgnore={() => onIgnoreFlag(flag.id)}
-              onMarkUnclear={() => onMarkFlagUnclear(flag)}
-            />
+          {alertGroups.map((group) => (
+            <div key={group.type} className="space-y-2">
+              <p className="text-xs font-bold opacity-70">{group.label}</p>
+              {group.flags.map((flag) => (
+                <QualityFlagCard
+                  key={flag.id}
+                  flag={flag}
+                  correction={correctionsByFlagId.get(flag.id)}
+                  isIgnored={ignoredFlagIds.includes(flag.id)}
+                  onApply={() => {
+                    const correction = correctionsByFlagId.get(flag.id);
+                    if (correction) onApplyCorrection(correction);
+                  }}
+                  onIgnore={() => onIgnoreFlag(flag.id)}
+                  onMarkUnclear={() => onMarkFlagUnclear(flag)}
+                />
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -276,22 +312,26 @@ export function TranscriptScreen({
         <p className="text-xs font-bold uppercase tracking-wide text-field-muted">Raw draft transcript ({rawTranscriptLanguageName})</p>
         <StatusBadge label="Preserved" tone="good" icon={<ShieldCheck className="h-3.5 w-3.5" />} />
       </div>
-      <p className="mt-1 text-xs opacity-60">Generated from audio. Never edited or overwritten — the audio recording remains the source record.</p>
+      <p className="mt-1 text-xs opacity-60">Read-only — generated from audio, never edited or overwritten.</p>
       <pre className="ink-panel mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-sm opacity-90">
         {rawTranscript || "No transcript captured yet."}
       </pre>
 
-      <div className="mt-5 flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-wide text-field-muted">English processing copy</p>
-        {translationReport.isTranslation ? (
-          <StatusBadge label={translationReport.label} tone="warn" icon={<Languages className="h-3.5 w-3.5" />} />
-        ) : (
-          <StatusBadge label="Local mock only" tone="neutral" icon={<Languages className="h-3.5 w-3.5" />} />
-        )}
-      </div>
-      <pre className="ink-panel mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-sm opacity-90">
-        {englishProcessingTranscript || "No transcript captured yet."}
-      </pre>
+      {showEnglishProcessingCopy && (
+        <>
+          <div className="mt-5 flex items-center justify-between">
+            <p className="text-xs font-bold uppercase tracking-wide text-field-muted">English processing copy</p>
+            <StatusBadge
+              label={translationReport.isTranslation ? translationReport.label : "Local mock only"}
+              tone={translationReport.isTranslation ? "warn" : "neutral"}
+              icon={<Languages className="h-3.5 w-3.5" />}
+            />
+          </div>
+          <pre className="ink-panel mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-sm opacity-90">
+            {englishProcessingTranscript || "No transcript captured yet."}
+          </pre>
+        </>
+      )}
 
       <div className="mt-5 flex items-center justify-between">
         <p className="text-xs font-bold uppercase tracking-wide text-field-muted">Corrected transcript — tester-reviewed</p>
@@ -322,10 +362,7 @@ export function TranscriptScreen({
 
       <div className="mt-4">
         <InfoCard icon={<ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />}>
-          Audio is the source record. The raw transcript is preserved exactly as captured — it is never overwritten. The
-          English processing copy is a local, offline mock — not a paid AI call, not a validated translation — used only
-          to help draft the fields on the next screen. Review the quality alerts above and correct below before saving;
-          flagged records require QC before final reporting.
+          Audio is the source record — the raw transcript is never edited. Suggestions only ever change the corrected copy below.
         </InfoCard>
       </div>
 

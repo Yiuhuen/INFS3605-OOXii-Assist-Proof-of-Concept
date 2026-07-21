@@ -292,7 +292,9 @@ textarea:focus-visible {
      prompt text — e.g. "Play aloud" / "Why this matters" on the recording
      screen. Deliberately smaller than .secondary-button. */
   .chip-button {
-    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
+    /* min-height keeps the tap area field-usable (gloves, sunlight, moving
+       vehicle) without inflating the visual weight of these secondary pills. */
+    @apply inline-flex min-h-[2.5rem] items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
     border: 1px solid var(--line);
     background: var(--bg-surface);
     color: var(--text);
