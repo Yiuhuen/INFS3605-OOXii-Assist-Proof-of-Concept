@@ -2,13 +2,23 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
-import type { ExtractedFields, TestRecord } from "@/lib/types";
+import type { ExtractedFields, FieldConfidenceLevel, ManualExtractedFields, TestRecord } from "@/lib/types";
 import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasonGroups, type QcFilter } from "@/lib/qc";
+import { FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
+import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
 import { Disclosure, EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField, type BadgeTone } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 const RISK_TONE: Record<"low" | "medium" | "high", BadgeTone> = { low: "good", medium: "warn", high: "danger" };
 const SEVERITY_TONE: Record<"info" | "warning" | "critical", BadgeTone> = { info: "neutral", warning: "warn", critical: "danger" };
+const HIGH_RISK_FIELD_SET = new Set<string>(HIGH_RISK_EXTRACTED_FIELDS);
+const SOURCE_LABELS: Record<"manual" | "transcript" | "corrected_transcript" | "unknown", string> = {
+  manual: "Manual entry",
+  transcript: "Transcript",
+  corrected_transcript: "Corrected transcript",
+  unknown: "Not captured"
+};
+const CONFIDENCE_TONE: Record<FieldConfidenceLevel, BadgeTone> = { high: "good", medium: "neutral", low: "warn", unknown: "warn" };
 
 export function QcScreen({
   records,
@@ -273,23 +283,33 @@ export function QcScreen({
 
           <div>
             <p className="field-label">Review captured fields</p>
-            <p className="mb-3 text-xs opacity-60">Missing fields are highlighted. Editing here flags the record as edited for verification.</p>
+            <p className="mb-3 text-xs opacity-60">Missing fields are highlighted. Editing here flags the record as edited for verification and marks that field source: manual.</p>
             <div className="space-y-3">
-              {(Object.entries(effective) as Array<[string, string | number | string[]]>)
-                .filter(([key]) => key !== "missing_fields" && key !== "confidence_score" && key !== "field_confidence")
-                .map(([key, value]) => {
-                  const missing = selected.missing_fields.includes(key);
-                  return (
+              {(Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>).map((key) => {
+                const missing = selected.missing_fields.includes(key);
+                const fieldMeta = effective.field_confidence?.[key];
+                const isHighRisk = HIGH_RISK_FIELD_SET.has(key);
+                return (
+                  <div key={key} className={missing ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}>
                     <TextAreaField
-                      key={key}
-                      label={key.replaceAll("_", " ")}
-                      className={missing ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}
-                      value={String(value)}
+                      label={FIELD_DISPLAY_LABELS[key]}
+                      value={String(effective[key])}
                       onChange={(event) => updateRecord(selected, { [key]: event.target.value } as Partial<ExtractedFields>)}
                       rows={2}
                     />
-                  );
-                })}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                      {isHighRisk && <StatusBadge label="High-risk field" tone="neutral" />}
+                      {fieldMeta && <StatusBadge label={`Source: ${SOURCE_LABELS[fieldMeta.source]}`} tone="neutral" />}
+                      {fieldMeta && <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />}
+                      {fieldMeta && (fieldMeta.requiresReview ? <StatusBadge label="Review required" tone="warn" /> : <StatusBadge label="Ready" tone="good" />)}
+                    </div>
+                    {fieldMeta?.evidence && <p className="mt-1 text-xs opacity-60">Evidence: &ldquo;{fieldMeta.evidence}&rdquo;</p>}
+                    {fieldMeta?.reason && (fieldMeta.confidence === "low" || fieldMeta.confidence === "unknown") && (
+                      <p className="mt-1 text-xs opacity-60">{fieldMeta.reason}</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 

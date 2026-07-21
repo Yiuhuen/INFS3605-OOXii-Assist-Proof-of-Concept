@@ -1,4 +1,6 @@
-import type { ProcessingStatus, QCStatus, RecordingStatus, TestRecord, TranscriptQualityRisk } from "./types";
+import { FIELD_DISPLAY_LABELS } from "./fieldExtraction";
+import { HIGH_RISK_EXTRACTED_FIELDS } from "./transcriptQuality";
+import type { ManualExtractedFields, ProcessingStatus, QCStatus, RecordingStatus, TestRecord, TranscriptQualityRisk } from "./types";
 
 /**
  * ---------------------------------------------------------------------------
@@ -65,7 +67,8 @@ export function evaluateNeedsQc({
   transcriptQualityRisk = "low",
   hasClinicalCorrection = false,
   translationReviewRequired = false,
-  extractionUnsafe = false
+  extractionUnsafe = false,
+  fieldsRequireReviewUnconfirmed = false
 }: {
   recordingStatus: RecordingStatus;
   editedByUser: boolean;
@@ -84,6 +87,8 @@ export function evaluateNeedsQc({
   translationReviewRequired?: boolean;
   /** True when the transcript/translation was too uncertain to auto-extract structured fields confidently — see deriveExtractionSafetyStatus. */
   extractionUnsafe?: boolean;
+  /** True when at least one draft-extracted field is flagged requiresReview and the tester has not ticked "Fields reviewed" — see lib/fieldExtraction.ts and the CapturedFieldsScreen confirmation. */
+  fieldsRequireReviewUnconfirmed?: boolean;
 }): boolean {
   return (
     recordingStatus !== "recorded" ||
@@ -97,7 +102,8 @@ export function evaluateNeedsQc({
     transcriptQualityRisk !== "low" ||
     hasClinicalCorrection ||
     translationReviewRequired ||
-    extractionUnsafe
+    extractionUnsafe ||
+    fieldsRequireReviewUnconfirmed
   );
 }
 
@@ -265,6 +271,43 @@ function buildCategorizedQcReasons(record: TestRecord): CategorizedQcReason[] {
   }
   if (record.extraction_safety_status === "draft_review_required") {
     reasons.push({ category: "Transcript quality", reason: "Draft extraction — requires review" });
+  }
+  if (record.transcript_quality_risk !== "low") {
+    reasons.push({ category: "Transcript quality", reason: "Transcript quality risk affects extracted fields" });
+  }
+
+  // Per-field draft-extraction reasons (spec: lib/fieldExtraction.ts field_confidence) —
+  // one line per field so a QC reviewer knows exactly which value to double-check,
+  // rather than a single "something's wrong" badge.
+  const effectiveFields = record.edited_extracted_json ?? record.extracted_json;
+  const fieldConfidenceMap = effectiveFields.field_confidence;
+  if (fieldConfidenceMap) {
+    let genericDraftReviewNeeded = false;
+    (Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>).forEach((key) => {
+      const meta = fieldConfidenceMap[key];
+      if (!meta) return;
+      const label = FIELD_DISPLAY_LABELS[key];
+      const isHighRisk = HIGH_RISK_EXTRACTED_FIELDS.includes(key);
+
+      if (isHighRisk && !meta.value.trim()) {
+        reasons.push({ category: "Missing & edited fields", reason: `High-risk field not captured: ${label}` });
+        return;
+      }
+      if (meta.source === "manual" && isHighRisk) {
+        reasons.push({ category: "Missing & edited fields", reason: `Manual value entered for high-risk field: ${label}` });
+      }
+      if (meta.confidence === "low") {
+        reasons.push({ category: "Transcript quality", reason: `Low-confidence extracted field: ${label}` });
+      } else if (meta.requiresReview) {
+        genericDraftReviewNeeded = true;
+      }
+    });
+    if (genericDraftReviewNeeded) {
+      reasons.push({ category: "Transcript quality", reason: "Draft field extracted from transcript requires review" });
+    }
+  }
+  if (fieldConfidenceMap && !record.fields_reviewed_by_tester && Object.values(fieldConfidenceMap).some((meta) => meta?.requiresReview)) {
+    reasons.push({ category: "Missing & edited fields", reason: "Draft fields not yet confirmed reviewed by tester" });
   }
 
   if (record.sync_status === "Pending sync") reasons.push({ category: "Sync & export status", reason: "Pending sync" });

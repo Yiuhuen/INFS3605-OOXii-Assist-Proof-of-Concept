@@ -1,29 +1,20 @@
 "use client";
 
-import { Save, ShieldAlert, Zap } from "lucide-react";
+import { Save, ShieldAlert, Sparkles, Zap } from "lucide-react";
 import type { ExtractedFields, ExtractionSafetyStatus, FieldConfidenceLevel, ManualExtractedFields, ProcessingStatus } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
+import { FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
 import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
-import { InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard, type BadgeTone } from "@/components/ui";
+import { CheckboxCard, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard, type BadgeTone } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
-
-const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confidence_score" | "field_confidence">, string> = {
-  right_eye_distance_result: "Right eye distance result",
-  left_eye_distance_result: "Left eye distance result",
-  final_readable_line: "Final readable line",
-  glasses_selected: "Glasses selected",
-  comfort_response: "Comfort response",
-  cataract_history_confirmed: "Cataract history confirmed",
-  current_glasses: "Current glasses",
-  additional_notes: "Additional notes"
-};
 
 const HIGH_RISK_FIELD_SET = new Set<string>(HIGH_RISK_EXTRACTED_FIELDS);
 
-const SOURCE_LABELS: Record<"manual" | "transcript" | "corrected_transcript", string> = {
+const SOURCE_LABELS: Record<"manual" | "transcript" | "corrected_transcript" | "unknown", string> = {
   manual: "Manual entry",
   transcript: "Transcript",
-  corrected_transcript: "Corrected transcript"
+  corrected_transcript: "Corrected transcript",
+  unknown: "Not captured"
 };
 
 const CONFIDENCE_TONE: Record<FieldConfidenceLevel, BadgeTone> = {
@@ -42,22 +33,44 @@ export function CapturedFieldsScreen({
   onEditField,
   onBackToTranscript,
   onSave,
-  extractionSafetyStatus
+  extractionSafetyStatus,
+  onAutoFill,
+  autoFillSummary,
+  fieldsReviewedConfirmed,
+  onToggleFieldsReviewed
 }: {
   clientId: string;
   extracted: ExtractedFields;
   editedFields: ExtractedFields | null;
   processingStatus: ProcessingStatus;
   isOnline: boolean;
-  onEditField: (key: keyof ExtractedFields, value: string) => void;
+  onEditField: (key: keyof ManualExtractedFields, value: string) => void;
   onBackToTranscript: () => void;
   onSave: () => void;
   /** "draft_review_required" when the transcript/translation this extraction is based on was flagged uncertain — see lib/transcriptQuality.ts deriveExtractionSafetyStatus. */
   extractionSafetyStatus: ExtractionSafetyStatus;
+  /** Re-runs draft extraction against the latest corrected transcript — only ever fills fields the tester hasn't hand-edited. */
+  onAutoFill: () => void;
+  /** e.g. "4 fields suggested, 2 still need review." — set right after onAutoFill runs, null otherwise. */
+  autoFillSummary: string | null;
+  /** Tester's explicit "Fields reviewed" confirmation — see lib/qc.ts evaluateNeedsQc fieldsRequireReviewUnconfirmed. */
+  fieldsReviewedConfirmed: boolean;
+  onToggleFieldsReviewed: () => void;
 }) {
   const effective = editedFields ?? extracted;
   const lowConfidence = effective.confidence_score < 0.7 || effective.missing_fields.length > 0;
   const qcRequired = lowConfidence || Boolean(editedFields) || extractionSafetyStatus === "draft_review_required";
+  const anyFieldRequiresReview = Boolean(effective.field_confidence && Object.values(effective.field_confidence).some((meta) => meta?.requiresReview));
+
+  // Compact "X ready · Y need review · Z unknown" counts so a review pass
+  // with several genuinely-unknown fields reads as a quick scan, not a wall
+  // of identical warning cards — the fields themselves stay fully visible
+  // below (still editable, still show evidence) for the ones that need it.
+  const fieldKeys = Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>;
+  const fieldConfidences = fieldKeys.map((key) => effective.field_confidence?.[key]);
+  const unknownCount = fieldConfidences.filter((meta) => (meta?.confidence ?? "unknown") === "unknown").length;
+  const reviewCount = fieldConfidences.filter((meta) => meta && meta.confidence !== "unknown" && meta.requiresReview).length;
+  const readyCount = fieldConfidences.filter((meta) => meta && meta.confidence !== "unknown" && !meta.requiresReview).length;
 
   return (
     <section>
@@ -74,6 +87,12 @@ export function CapturedFieldsScreen({
         {qcRequired && processingStatus !== "needs_qc" && <StatusBadge label="Needs QC" tone="danger" />}
       </div>
 
+      <p className="mb-5 text-sm opacity-70">
+        Auto-filled from transcript. Please confirm before saving. <span className="font-bold text-[var(--good)]">{readyCount} ready</span> ·{" "}
+        <span className="font-bold text-[var(--gold)]">{reviewCount} need review</span> ·{" "}
+        <span className="font-bold opacity-80">{unknownCount} unknown</span>
+      </p>
+
       {extractionSafetyStatus === "draft_review_required" && (
         <div className="mb-5">
           <WarningCard icon={<ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />}>
@@ -83,16 +102,25 @@ export function CapturedFieldsScreen({
         </div>
       )}
 
-      <div className="space-y-4">
-        {(Object.keys(FIELD_LABELS) as Array<keyof typeof FIELD_LABELS>).map((key) => {
+      <SecondaryButton fullWidth icon={<Sparkles className="h-4 w-4" />} onClick={onAutoFill}>
+        Auto-fill from transcript
+      </SecondaryButton>
+      {autoFillSummary && (
+        <div className="mt-3">
+          <InfoCard>{autoFillSummary}</InfoCard>
+        </div>
+      )}
+
+      <div className="mt-5 space-y-4">
+        {(Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>).map((key) => {
           const missing = effective.missing_fields.includes(key);
-          const fieldMeta = effective.field_confidence?.[key as keyof ManualExtractedFields];
+          const fieldMeta = effective.field_confidence?.[key];
           const flagConfidence = fieldMeta && (fieldMeta.confidence === "low" || fieldMeta.confidence === "unknown");
           const isHighRisk = HIGH_RISK_FIELD_SET.has(key);
           return (
             <label key={key} className={`block ${missing || flagConfidence ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}`}>
               <span className="field-label flex flex-wrap items-center gap-2">
-                {FIELD_LABELS[key]}
+                {FIELD_DISPLAY_LABELS[key]}
                 {isHighRisk && <StatusBadge label="High-risk field" tone="neutral" icon={<ShieldAlert className="h-3.5 w-3.5" />} />}
               </span>
               <input
@@ -104,9 +132,14 @@ export function CapturedFieldsScreen({
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
                 {fieldMeta && <StatusBadge label={`Source: ${SOURCE_LABELS[fieldMeta.source]}`} tone="neutral" />}
                 {fieldMeta && <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />}
-                {fieldMeta?.requiresReview && <StatusBadge label="Review required" tone="warn" />}
+                {fieldMeta && (fieldMeta.requiresReview ? <StatusBadge label="Review required" tone="warn" /> : <StatusBadge label="Ready" tone="good" />)}
               </div>
-              {fieldMeta?.reason && flagConfidence && <p className="mt-1 text-xs opacity-60">{fieldMeta.reason}</p>}
+              {fieldMeta?.evidence && <p className="mt-1 text-xs opacity-60">Evidence: &ldquo;{fieldMeta.evidence}&rdquo;</p>}
+              {missing && isHighRisk ? (
+                <p className="mt-1 text-xs opacity-60">Not captured from transcript — enter manually or send to QC.</p>
+              ) : (
+                fieldMeta?.reason && flagConfidence && <p className="mt-1 text-xs opacity-60">{fieldMeta.reason}</p>
+              )}
             </label>
           );
         })}
@@ -115,13 +148,20 @@ export function CapturedFieldsScreen({
       {effective.missing_fields.length > 0 && (
         <div className="mt-3">
           <WarningCard>
-            Missing: {effective.missing_fields.map((key) => FIELD_LABELS[key as keyof typeof FIELD_LABELS] ?? key).join(", ")}
+            Missing: {effective.missing_fields.map((key) => FIELD_DISPLAY_LABELS[key as keyof ManualExtractedFields] ?? key).join(", ")}
           </WarningCard>
         </div>
       )}
 
       <div className="mt-5">
         <InfoCard>Editing fields does not change the source transcript. Edited fields are flagged for QC review.</InfoCard>
+      </div>
+
+      <div className="mt-5">
+        <CheckboxCard checked={fieldsReviewedConfirmed} onToggle={onToggleFieldsReviewed} label="Fields reviewed — I have checked these values against the recording." />
+        {!fieldsReviewedConfirmed && anyFieldRequiresReview && (
+          <p className="mt-2 text-xs opacity-60">Confirm captured fields have been reviewed before saving — this record will stay in QC until then.</p>
+        )}
       </div>
 
       <PrimaryButton fullWidth className="mt-6" icon={<Save className="h-5 w-5" />} onClick={onSave}>

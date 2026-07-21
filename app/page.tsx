@@ -19,10 +19,10 @@ import { SettingsScreen } from "@/components/screens/SettingsScreen";
 import { recordsToLonglistCsv, recordsToAuditCsv, downloadCsv } from "@/lib/csv";
 import { getFallbackPack } from "@/lib/languagePacks";
 import { generateClientId, generateMarkerId, generateRecordId, generateSegmentId } from "@/lib/ids";
-import { mockExtractFields } from "@/lib/mockAi";
+import { extractFieldsFromTranscript } from "@/lib/fieldExtraction";
 import { computeProcessingStatus, evaluateNeedsQc, recordNeedsQc } from "@/lib/qc";
 import { getNextAction, type WorkflowState } from "@/lib/workflow";
-import { getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
+import { clearAllAudioBlobs, getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
 import { loadAuthMode, saveAuthMode, type AuthMode } from "@/lib/auth";
 import { applyDisplaySettings, loadDisplaySettings, saveDisplaySettings, type DisplaySettings } from "@/lib/settings";
 import {
@@ -36,7 +36,7 @@ import {
   type TranscriptEngineStatus
 } from "@/lib/liveTranscript";
 import type { InsightTargetPage } from "@/lib/insights";
-import { analyseTranscriptQuality, applySuggestedCorrection, buildFieldConfidence, deriveExtractionSafetyStatus } from "@/lib/transcriptQuality";
+import { analyseTranscriptQuality, applySuggestedCorrection, deriveExtractionSafetyStatus, HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
 import { analyseTranslationSafety } from "@/lib/translationSafety";
 import {
   clearRecords,
@@ -56,8 +56,10 @@ import {
   type ClientRecord,
   type ConnectionMode,
   type CorrectionHistoryEntry,
+  type ExtractedFieldMap,
   type ExtractedFields,
   type ExtractionSource,
+  type FieldConfidence,
   type LanguageCode,
   type LanguagePack,
   type ManualExtractedFields,
@@ -121,6 +123,44 @@ function scoreExtractedFields(fields: ExtractedFields): ExtractedFields {
   });
   const confidence_score = Math.max(0.45, Math.round((1 - missing_fields.length / REQUIRED_EXTRACTED_FIELDS.length) * 100) / 100);
   return { ...withUnknowns, missing_fields, confidence_score };
+}
+
+const MANUAL_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
+  "comfort_response",
+  "cataract_history_confirmed",
+  "current_glasses",
+  "right_eye_distance_result",
+  "left_eye_distance_result",
+  "final_readable_line",
+  "glasses_selected",
+  "additional_notes"
+];
+
+/**
+ * Reconciles extractFieldsFromTranscript's draft map with the tester's
+ * pre-recording manual notes (manualFields) — a field the transcript
+ * couldn't determine still falls back to whatever the tester already typed,
+ * same legacy behaviour as before this feature. The field_confidence entry
+ * is rewritten to "manual" source in that case, so the UI's source badge
+ * never claims transcript evidence for a value that actually came from the
+ * tester's own notes.
+ */
+function reconcileWithManualFallback(fieldMap: ExtractedFieldMap, manual: ManualExtractedFields): { values: ManualExtractedFields; fieldMap: ExtractedFieldMap } {
+  const values = createEmptyManualFields();
+  const reconciled: ExtractedFieldMap = { ...fieldMap };
+  MANUAL_FIELD_KEYS.forEach((key) => {
+    const draft = fieldMap[key].value;
+    if (draft) {
+      values[key] = draft;
+      return;
+    }
+    const manualValue = manual[key];
+    if (manualValue) {
+      values[key] = manualValue;
+      reconciled[key] = { value: manualValue, source: "manual", confidence: "high", requiresReview: false };
+    }
+  });
+  return { values, fieldMap: reconciled };
 }
 
 export default function Home() {
@@ -194,6 +234,12 @@ export default function Home() {
   const [extracted, setExtracted] = useState<ExtractedFields | null>(null);
   const [editedFields, setEditedFields] = useState<ExtractedFields | null>(null);
   const [extractionSource, setExtractionSource] = useState<ExtractionSource>("raw_transcript");
+  /** Which draft fields the tester has manually edited on the Review captured fields screen — "Auto-fill from transcript" (spec §7-§8) must never overwrite these. */
+  const [fieldEditedByUser, setFieldEditedByUser] = useState<Partial<Record<keyof ManualExtractedFields, boolean>>>({});
+  /** Tester's explicit "Fields reviewed" confirmation (spec §10) — resets whenever a field's value changes so it always reflects the fields currently on screen. */
+  const [fieldsReviewedConfirmed, setFieldsReviewedConfirmed] = useState(false);
+  /** Short result summary shown after "Auto-fill from transcript" runs, e.g. "4 fields suggested, 2 still need review." */
+  const [autoFillSummary, setAutoFillSummary] = useState<string | null>(null);
 
   const [latestRecord, setLatestRecord] = useState<TestRecord | null>(null);
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>("browser");
@@ -437,6 +483,9 @@ export default function Home() {
         ? "reviewed_no_changes"
         : "not_reviewed";
   const fieldsEffective = editedFields ?? extracted;
+  /** True when at least one draft-extracted field still needs a look and the tester hasn't ticked "Fields reviewed" yet — spec §10. */
+  const fieldsRequireReviewUnconfirmedPreview =
+    !fieldsReviewedConfirmed && Boolean(fieldsEffective?.field_confidence && MANUAL_FIELD_KEYS.some((key) => fieldsEffective.field_confidence?.[key]?.requiresReview));
   const fieldsNeedsQc = fieldsEffective
     ? evaluateNeedsQc({
         recordingStatus,
@@ -450,7 +499,8 @@ export default function Home() {
         transcriptQualityRisk: transcriptQualityReport.overallRisk,
         hasClinicalCorrection: hasClinicalCorrectionPreview,
         translationReviewRequired: translationSafetyReport.requiresQc,
-        extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required"
+        extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required",
+        fieldsRequireReviewUnconfirmed: fieldsRequireReviewUnconfirmedPreview
       })
     : false;
   const fieldsProcessingStatus: ProcessingStatus = computeProcessingStatus({
@@ -527,6 +577,9 @@ export default function Home() {
     setExtracted(null);
     setEditedFields(null);
     setExtractionSource("raw_transcript");
+    setFieldEditedByUser({});
+    setFieldsReviewedConfirmed(false);
+    setAutoFillSummary(null);
     setLatestRecord(null);
     setSyncMessage("");
   }
@@ -920,6 +973,9 @@ export default function Home() {
     setTranscriptSentToQc(false);
     setExtracted(null);
     setEditedFields(null);
+    setFieldEditedByUser({});
+    setFieldsReviewedConfirmed(false);
+    setAutoFillSummary(null);
     setScreen("transcript");
   }
 
@@ -1006,40 +1062,114 @@ export default function Home() {
     goToPromptIndex(currentStepIndex - 1, "previous");
   }
 
+  /**
+   * Shared input builder for extractFieldsFromTranscript — corrected
+   * transcript wins when the tester has edited it, otherwise the English
+   * processing copy, otherwise the raw transcript (spec §1). Segments and
+   * prompt markers carry the step-by-step attribution (spec §3).
+   */
+  function buildExtractionInput() {
+    return {
+      rawTranscriptText: rawTranscript,
+      correctedTranscriptText: correctedTranscript,
+      englishProcessingTranscript,
+      transcriptSegments,
+      promptMarkers,
+      language: activePack.code,
+      transcriptQualityReport
+    };
+  }
+
+  /**
+   * extractFieldsFromTranscript only judges transcript-quality risk (spec's
+   * own signature). Translation risk is a separate report (lib/translationSafety.ts)
+   * for non-English records, so it's applied here as one more safety clamp —
+   * a non-English record's high-risk fields can never show "high" confidence,
+   * matching the same "never trusted silently" principle as spec §6.
+   */
+  function extractWithTranslationRiskClamp(): ExtractedFieldMap {
+    const fieldMap = extractFieldsFromTranscript(buildExtractionInput());
+    if (!translationSafetyReport.unsafeForAutoExtraction) return fieldMap;
+    const clamped: ExtractedFieldMap = { ...fieldMap };
+    MANUAL_FIELD_KEYS.forEach((key) => {
+      const meta = fieldMap[key];
+      if (HIGH_RISK_EXTRACTED_FIELDS.includes(key) && meta.confidence === "high") {
+        clamped[key] = {
+          ...meta,
+          confidence: "medium",
+          requiresReview: true,
+          reason: meta.reason ?? "Non-English record — the English processing copy is an unverified translation, verify against the audio."
+        };
+      }
+    });
+    return clamped;
+  }
+
   function runExtraction() {
     const transcriptChanged = correctedTranscript.trim().length > 0 && correctedTranscript.trim() !== englishProcessingTranscript.trim();
     const source: ExtractionSource = transcriptChanged ? "corrected_transcript" : recordingStatus === "recorded" ? "raw_transcript" : "manual_override";
-    const base = transcriptChanged ? correctedTranscript : englishProcessingTranscript;
-    const aiResult = mockExtractFields(base);
-    const merged: ExtractedFields = scoreExtractedFields({
-      ...aiResult,
-      right_eye_distance_result: aiResult.right_eye_distance_result || manualFields.right_eye_distance_result,
-      left_eye_distance_result: aiResult.left_eye_distance_result || manualFields.left_eye_distance_result,
-      final_readable_line: aiResult.final_readable_line || manualFields.final_readable_line,
-      glasses_selected: aiResult.glasses_selected || manualFields.glasses_selected,
-      comfort_response: aiResult.comfort_response || manualFields.comfort_response,
-      cataract_history_confirmed: aiResult.cataract_history_confirmed || manualFields.cataract_history_confirmed,
-      current_glasses: aiResult.current_glasses || manualFields.current_glasses,
-      additional_notes: aiResult.additional_notes || manualFields.additional_notes
-    });
 
-    // Structured extraction never runs blind to transcript/translation risk —
-    // per-field draft-quality metadata rides alongside the values themselves
-    // (spec §7) so an uncertain field is labelled, never trusted silently.
-    const { missing_fields: _missingFields, confidence_score: _confidenceScore, field_confidence: _existingFieldConfidence, ...manualShape } = merged;
-    const fieldConfidenceSource: "manual" | "transcript" | "corrected_transcript" =
-      source === "manual_override" ? "manual" : source === "corrected_transcript" ? "corrected_transcript" : "transcript";
-    merged.field_confidence = buildFieldConfidence(manualShape, transcriptQualityReport, translationSafetyReport, fieldConfidenceSource);
+    const fieldMap = extractWithTranslationRiskClamp();
+    const { values, fieldMap: reconciledMap } = reconcileWithManualFallback(fieldMap, manualFields);
+
+    const merged: ExtractedFields = scoreExtractedFields({ ...values, missing_fields: [], confidence_score: 0 });
+    merged.field_confidence = reconciledMap;
 
     setExtracted(merged);
     setEditedFields(null);
     setExtractionSource(source);
+    setFieldEditedByUser({});
+    setFieldsReviewedConfirmed(false);
+    setAutoFillSummary(null);
   }
 
   function goToCapturedFields() {
     runExtraction();
     if (transcriptNeedsQc) setTranscriptSentToQc(true);
     setScreen("fields");
+  }
+
+  /**
+   * "Auto-fill from transcript" (spec §8) — re-runs extraction using the
+   * latest corrected transcript, but only ever writes into fields the tester
+   * has NOT already hand-edited on this screen (fieldEditedByUser). Edited
+   * fields are left completely untouched, values and metadata alike.
+   */
+  function autoFillFromTranscript() {
+    if (!extracted) return;
+    const fieldMap = extractWithTranslationRiskClamp();
+    const { values, fieldMap: reconciledMap } = reconcileWithManualFallback(fieldMap, manualFields);
+
+    let suggestedCount = 0;
+    let reviewCount = 0;
+    MANUAL_FIELD_KEYS.forEach((key) => {
+      if (fieldEditedByUser[key]) return;
+      if (reconciledMap[key].value) suggestedCount += 1;
+      if (reconciledMap[key].requiresReview) reviewCount += 1;
+    });
+
+    function applyAutoFill(base: ExtractedFields): ExtractedFields {
+      const next: ExtractedFields = { ...base };
+      MANUAL_FIELD_KEYS.forEach((key) => {
+        if (fieldEditedByUser[key]) return;
+        next[key] = values[key];
+      });
+      const rescored = scoreExtractedFields(next);
+      const updatedConfidence = { ...(base.field_confidence ?? {}) };
+      MANUAL_FIELD_KEYS.forEach((key) => {
+        if (fieldEditedByUser[key]) return;
+        updatedConfidence[key] = reconciledMap[key];
+      });
+      rescored.field_confidence = updatedConfidence;
+      return rescored;
+    }
+
+    setExtracted(applyAutoFill(extracted));
+    setEditedFields((prev) => (prev ? applyAutoFill(prev) : null));
+    setFieldsReviewedConfirmed(false);
+    setAutoFillSummary(
+      `${suggestedCount} field${suggestedCount === 1 ? "" : "s"} suggested, ${reviewCount} still ${reviewCount === 1 ? "needs" : "need"} review.`
+    );
   }
 
   async function syncPendingRecords() {
@@ -1098,11 +1228,23 @@ export default function Home() {
     }
   }
 
-  function editExtractedField(key: keyof ExtractedFields, value: string) {
+  /**
+   * A tester edit is always trusted for that one field (spec §7) — it's
+   * marked source "manual"/confidence "high"/requiresReview false and, via
+   * fieldEditedByUser, protected from ever being overwritten by a later
+   * "Auto-fill from transcript" run. The record as a whole still goes to QC
+   * because of the pre-existing edited_by_user flag below (unchanged).
+   */
+  function editExtractedField(key: keyof ManualExtractedFields, value: string) {
+    setFieldEditedByUser((prev) => ({ ...prev, [key]: true }));
+    setFieldsReviewedConfirmed(false);
     setEditedFields((prev) => {
       const base = prev ?? extracted;
       if (!base) return prev;
-      return scoreExtractedFields({ ...base, [key]: value });
+      const next = scoreExtractedFields({ ...base, [key]: value });
+      const manualConfidence: FieldConfidence = { value, source: "manual", confidence: "high", requiresReview: false };
+      next.field_confidence = { ...(base.field_confidence ?? {}), [key]: manualConfidence };
+      return next;
     });
   }
 
@@ -1125,7 +1267,8 @@ export default function Home() {
       transcriptQualityRisk: transcriptQualityReport.overallRisk,
       hasClinicalCorrection: hasClinicalCorrectionPreview,
       translationReviewRequired: translationSafetyReport.requiresQc,
-      extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required"
+      extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required",
+      fieldsRequireReviewUnconfirmed: fieldsRequireReviewUnconfirmedPreview
     });
 
     let audioLocalUrl: string;
@@ -1193,6 +1336,7 @@ export default function Home() {
       unresolved_transcript_flag_ids: unresolvedTranscriptFlagIds,
       translation_review_required: translationSafetyReport.requiresQc,
       extraction_safety_status: extractionSafetyStatusPreview,
+      fields_reviewed_by_tester: fieldsReviewedConfirmed,
       client_snapshot: client,
       created_at: now,
       updated_at: now
@@ -1238,9 +1382,24 @@ export default function Home() {
     setScreen("saved");
   }
 
+  /**
+   * A QC-screen field edit is exactly as authoritative as a tester edit on
+   * Review captured fields (spec: "Clinical field edited after transcript
+   * review") — so it gets the same treatment: source flips to "manual",
+   * confidence "high", requiresReview cleared for that field. Without this,
+   * field_confidence kept showing the pre-edit transcript evidence/low
+   * confidence next to a value the reviewer had already corrected.
+   */
   function updateQcRecord(record: TestRecord, patch: Partial<ExtractedFields>) {
     const base = record.edited_extracted_json ?? record.extracted_json;
     const nextExtracted = scoreExtractedFields({ ...base, ...patch });
+    const updatedConfidence = { ...(base.field_confidence ?? {}) };
+    (Object.keys(patch) as Array<keyof ExtractedFields>).forEach((key) => {
+      if (key === "missing_fields" || key === "confidence_score" || key === "field_confidence") return;
+      const value = String(patch[key] ?? "");
+      updatedConfidence[key as keyof ManualExtractedFields] = { value, source: "manual", confidence: "high", requiresReview: false };
+    });
+    nextExtracted.field_confidence = updatedConfidence;
     const transcriptCaptured = Boolean(record.raw_transcript_text.trim()) || record.transcript_segments.some((segment) => segment.isFinal && segment.text.trim());
     const nextRecord: TestRecord = {
       ...record,
@@ -1528,6 +1687,10 @@ export default function Home() {
           onBackToTranscript={() => setScreen("transcript")}
           onSave={saveCurrentRecord}
           extractionSafetyStatus={extractionSafetyStatusPreview}
+          onAutoFill={autoFillFromTranscript}
+          autoFillSummary={autoFillSummary}
+          fieldsReviewedConfirmed={fieldsReviewedConfirmed}
+          onToggleFieldsReviewed={() => setFieldsReviewedConfirmed((value) => !value)}
         />
       )}
 
@@ -1566,6 +1729,9 @@ export default function Home() {
           onExportAudit={handleExportAudit}
           onClear={() => {
             clearRecords();
+            clearAllAudioBlobs().catch(() => {
+              // IndexedDB may be unavailable (e.g. private mode) — the local record list is already cleared, which is the primary reset signal.
+            });
             setRecords([]);
           }}
           onReviewQc={() => setScreen("qc")}

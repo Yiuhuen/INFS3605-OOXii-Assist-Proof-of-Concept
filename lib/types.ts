@@ -55,7 +55,7 @@ export interface ExtractedFields {
   additional_notes: string;
   missing_fields: string[];
   confidence_score: number;
-  /** Per-field draft-quality metadata — see lib/transcriptQuality.ts buildFieldConfidence. Optional/additive so existing readers of ExtractedFields keep working untouched. */
+  /** Per-field draft-quality metadata — see lib/fieldExtraction.ts extractFieldsFromTranscript. Optional/additive so existing readers of ExtractedFields keep working untouched. */
   field_confidence?: FieldConfidenceMap;
 }
 
@@ -71,7 +71,7 @@ export const REQUIRED_EXTRACTED_FIELDS: Array<keyof ExtractedFields> = [
 /** Literal value stored for a required/populate field the local extraction (or manual entry) could not determine. Never a guess — see lib/mockAi.ts. */
 export const UNKNOWN_FIELD_VALUE = "UNKNOWN";
 
-export type ManualExtractedFields = Omit<ExtractedFields, "missing_fields" | "confidence_score">;
+export type ManualExtractedFields = Omit<ExtractedFields, "missing_fields" | "confidence_score" | "field_confidence">;
 
 export function createEmptyManualFields(): ManualExtractedFields {
   return {
@@ -169,6 +169,8 @@ export interface TestRecord {
   translation_review_required: boolean;
   /** "draft_review_required" when extracted_json was built from a transcript that was unsafe to auto-extract from confidently. */
   extraction_safety_status: ExtractionSafetyStatus;
+  /** True once the tester has explicitly confirmed "Fields reviewed" on the Review captured fields screen. Draft-extracted fields that still require review keep the record in QC until this is set — see lib/qc.ts evaluateNeedsQc. */
+  fields_reviewed_by_tester: boolean;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;
@@ -296,13 +298,24 @@ export interface TranslationSafetyReport {
 
 export interface FieldConfidence {
   value: string;
-  source: "manual" | "transcript" | "corrected_transcript";
+  /** "unknown" is used only when no evidence was found at all — see lib/fieldExtraction.ts. */
+  source: "manual" | "transcript" | "corrected_transcript" | "unknown";
   confidence: FieldConfidenceLevel;
   requiresReview: boolean;
   reason?: string;
+  /** Short quote from the transcript that produced this value — shown to the tester so a draft is never presented as unexplained fact. */
+  evidence?: string;
+  /** Prompt step (see lib/languagePacks.ts ids) the evidence was attributed to, when step-scoped transcript segments were available. */
+  stepId?: string;
 }
 
 export type FieldConfidenceMap = Partial<Record<keyof ManualExtractedFields, FieldConfidence>>;
+
+/** Alias used by lib/fieldExtraction.ts — same shape as FieldConfidence, named to match the draft-extraction spec. */
+export type ExtractedFieldValue = FieldConfidence;
+
+/** Full (non-partial) per-field draft map produced by extractFieldsFromTranscript — always has an entry for every manual field, even when unknown. */
+export type ExtractedFieldMap = Record<keyof ManualExtractedFields, ExtractedFieldValue>;
 
 export interface PromptStep {
   id: string;

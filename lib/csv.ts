@@ -1,4 +1,4 @@
-import type { TestRecord } from "./types";
+import type { FieldConfidence, ManualExtractedFields, TestRecord } from "./types";
 
 function escapeCsv(value: unknown) {
   const text = value === undefined || value === null ? "" : String(value);
@@ -92,13 +92,45 @@ export const AUDIT_CSV_COLUMNS = [
   "corrections_applied",
   "unresolved_transcript_flags",
   "translation_review_required",
+  "right_eye_distance_result_source",
+  "right_eye_distance_result_confidence",
+  "right_eye_distance_result_evidence",
+  "left_eye_distance_result_source",
+  "left_eye_distance_result_confidence",
+  "left_eye_distance_result_evidence",
+  "final_readable_line_source",
+  "final_readable_line_confidence",
+  "final_readable_line_evidence",
+  "glasses_selected_source",
+  "glasses_selected_confidence",
+  "glasses_selected_evidence",
+  "comfort_response_source",
+  "comfort_response_confidence",
+  "comfort_response_evidence",
   "extraction_safety_status",
+  "fields_reviewed_by_tester",
   "created_at",
   "updated_at"
 ] as const;
 
+/** Audit-only per-field draft metadata columns — spec §12. "" for every column when the field has no field_confidence entry (e.g. a record saved before this feature, or a manually-only-entered field never run through extraction). */
+const AUDIT_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
+  "right_eye_distance_result",
+  "left_eye_distance_result",
+  "final_readable_line",
+  "glasses_selected",
+  "comfort_response"
+];
+
+function fieldConfidenceColumns(meta: FieldConfidence | undefined): [string, string, string] {
+  if (!meta) return ["", "", ""];
+  return [meta.source, meta.confidence, meta.evidence ?? ""];
+}
+
 function auditRow(record: TestRecord) {
   const unresolvedFlags = record.transcript_quality_flags.filter((flag) => record.unresolved_transcript_flag_ids.includes(flag.id));
+  const effectiveFields = record.edited_extracted_json ?? record.extracted_json;
+  const fieldConfidenceColumnsForRecord = AUDIT_FIELD_KEYS.flatMap((key) => fieldConfidenceColumns(effectiveFields.field_confidence?.[key]));
   return [
     ...longlistRow(record),
     record.language,
@@ -123,7 +155,9 @@ function auditRow(record: TestRecord) {
     JSON.stringify(record.corrections_applied),
     `${unresolvedFlags.length}: ${unresolvedFlags.map((flag) => flag.reason).join("; ")}`,
     record.translation_review_required ? "yes" : "no",
+    ...fieldConfidenceColumnsForRecord,
     record.extraction_safety_status,
+    record.fields_reviewed_by_tester ? "yes" : "no",
     record.created_at,
     record.updated_at
   ];

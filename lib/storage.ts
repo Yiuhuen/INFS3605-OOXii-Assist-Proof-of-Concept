@@ -85,6 +85,7 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     unresolved_transcript_flag_ids: record.unresolved_transcript_flag_ids ?? [],
     translation_review_required: record.translation_review_required ?? (record.language ? record.language !== "en" : false),
     extraction_safety_status: record.extraction_safety_status ?? "safe",
+    fields_reviewed_by_tester: record.fields_reviewed_by_tester ?? false,
     client_snapshot: {
       id: record.client_snapshot?.id ?? "",
       age_band: record.client_snapshot?.age_band ?? "",

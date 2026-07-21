@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, ChevronLeft, Clock, Plus } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone, qcStatusLabel } from "@/lib/qc";
+import { isSupabaseConfigured } from "@/lib/supabase";
 import { PrimaryButton, SecondaryButton, StatusBadge } from "@/components/ui";
 
 export function SavedScreen({
@@ -44,7 +45,7 @@ export function SavedScreen({
         <div className="flex items-center justify-between">
           <span className="text-sm opacity-70">Sync status</span>
           <StatusBadge
-            label={record.sync_status}
+            label={record.sync_status === "Synced" && !isSupabaseConfigured ? "Saved locally" : record.sync_status}
             tone={record.sync_status === "Synced" ? "good" : "warn"}
             icon={<Clock className="h-3.5 w-3.5" />}
           />

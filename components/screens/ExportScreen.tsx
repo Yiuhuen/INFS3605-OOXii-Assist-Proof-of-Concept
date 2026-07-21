@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Check, Download, ShieldCheck } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
 import type { InsightTargetPage } from "@/lib/insights";
@@ -75,6 +76,7 @@ export function ExportScreen({
   const pending = records.filter((record) => record.sync_status === "Pending sync").length;
   const needsQc = records.filter(recordNeedsQc).length;
   const ready = records.length - needsQc;
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   return (
     <section className="pb-8">
@@ -146,9 +148,32 @@ export function ExportScreen({
             Review remaining QC records first
           </SecondaryButton>
         )}
-        <DangerButton fullWidth disabled={records.length === 0} onClick={onClear}>
-          Clear local demo records
-        </DangerButton>
+        {confirmingClear ? (
+          <div className="space-y-3 rounded-2xl border border-[var(--danger)] p-4">
+            <WarningCard>
+              This permanently deletes all {records.length} local demo record{records.length === 1 ? "" : "s"} and their
+              audio from this device. This cannot be undone.
+            </WarningCard>
+            <div className="flex gap-3">
+              <SecondaryButton fullWidth onClick={() => setConfirmingClear(false)}>
+                Cancel
+              </SecondaryButton>
+              <DangerButton
+                fullWidth
+                onClick={() => {
+                  setConfirmingClear(false);
+                  onClear();
+                }}
+              >
+                Yes, delete all records
+              </DangerButton>
+            </div>
+          </div>
+        ) : (
+          <DangerButton fullWidth disabled={records.length === 0} onClick={() => setConfirmingClear(true)}>
+            Clear local demo records
+          </DangerButton>
+        )}
       </div>
     </section>
   );

@@ -19,6 +19,21 @@ OOXii Assist is a working Proof of Concept for an offline-first multilingual gui
 
 The app intentionally does **not** produce a medical prescription, change the clinical testing sequence, collect personal client identifiers, handle payment, handle inventory, use GPS, or support Bluetooth group testing.
 
+## Live demo script
+
+A single vertical slice, start to finish, in Chrome on `localhost` or the Vercel URL:
+
+1. **Continue as demo tester** on the setup screen — no password, works offline.
+2. From Home, tap **Start new anonymous client**. Point out the auto-generated ID (`C-XXXX`) and the on-screen privacy notice — no name, DOB, phone, or address is ever asked for.
+3. Fill the short non-personal client form (age band, gender, site, etc.) and tap **Start recording**.
+4. Tap **Start recording** on the record screen — grant the microphone prompt. Swipe the prompt card left/right (or use Previous/Next) through the four fixed clinical steps; the recording keeps running continuously underneath.
+5. Tap **Finish & review transcript**. Show the **raw transcript** (labelled "Preserved," read-only) next to the **corrected transcript** (labelled "Editable") — point out they are never the same field.
+6. Tap **Review captured fields** — the mock extraction has turned the transcript into structured, editable fields, each tagged with its confidence and source.
+7. Tap **Save record** — the record is saved to this device immediately, works offline, and shows its sync/QC status honestly (never claims "Synced" unless a real cloud sync happened).
+8. Open **More → QC Review**, open the saved record, show the categorised reasons it needs review, and tap **Mark complete**.
+9. Open **More → Export records**, download both the **OOXii Data Longlist** and the **Full Non-Personal Audit Longlist** CSVs.
+10. To reset for the next run: **More → Export records → Clear local demo records**, confirm the warning — the device is now a blank slate again.
+
 ## Design system
 
 The UI follows a mobile-first, dark-purple field-tool look: warm gold primary actions, soft lavender text, rounded low-glare cards, and a fixed blue/light colour code for right/left eye badges. Shared building blocks live in `components/ui.tsx` (`PrimaryButton`, `SecondaryButton`, `StatusBadge`, `MetricCard`, `ActionCard`, `PromptCard`, form fields, etc.) and `components/ScreenHeader.tsx` (back button + title + offline badge). Each screen composes these primitives instead of one-off markup, so a palette or spacing change only has to happen in one place.
@@ -49,6 +64,18 @@ npm run dev
 Real live transcription uses browser speech recognition and requires a supported browser, microphone permission, and HTTPS or localhost.
 
 Open the local URL shown in the terminal.
+
+## Browser & device notes
+
+- **Chrome is the preferred browser for the live demo.** It has the most reliable `webkitSpeechRecognition` support. Recent Edge also works. Safari and Firefox either lack live English transcription entirely or support it inconsistently — the app still works in every browser, but falls back to the manual/QC path (below) instead of a live transcript.
+- **The page must be served over `localhost` or HTTPS.** Browsers refuse both microphone access and SpeechRecognition on a plain-HTTP origin (`window.isSecureContext` must be `true`). `npm run dev` on `localhost` and a Vercel deployment both satisfy this automatically.
+- **Audio recording works even when live transcription doesn't.** MediaRecorder (the actual audio capture) and SpeechRecognition (the live draft transcript) are two independent browser APIs. If SpeechRecognition isn't supported or the language pack has no live-transcript support (Tok Pisin/Bislama), recording still proceeds normally — the tester just types the transcript manually on the next screen instead of reviewing an auto-drafted one.
+- **The live transcript is always a draft, never a final answer.** It is shown as an editable "Corrected transcript" next to a read-only, never-overwritten "Raw transcript," and any record built from a manual entry or an uncertain transcript is automatically flagged `needs_qc` — see [Transcript and extraction editing rules](#transcript-and-extraction-editing-rules) and [QC review rules](#qc-review-rules) below.
+- **If the microphone is blocked or denied,** the app never fabricates a transcript. It saves an honest placeholder ("Recording not available (failed/manual override)"), requires a one-line manual reason before the tester can continue, and routes the record straight to QC. This was verified in a sandboxed/headless browser with no microphone device, which is a good stand-in for a live demo where mic permission gets denied by accident.
+
+## Demo reset (for markers/testers, not a normal field tool)
+
+**More → Review & reporting → Export records → "Clear local demo records"** permanently deletes every locally saved test record (and its audio) from the current device/browser. It is deliberately **not** on the Home screen — it lives one tap deeper, under the same screen as CSV export, and asks for an explicit "Yes, delete all records" confirmation before it does anything irreversible. Use it right before the live demo to start from a clean slate, or between rehearsals. It never touches the language packs, tester profile, or display settings — only test records and their audio.
 
 ## Tester setup / Quick start (not a client login)
 
