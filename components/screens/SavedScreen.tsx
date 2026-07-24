@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, Clock, Plus } from "lucide-re
 import type { TestRecord } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone, qcStatusLabel } from "@/lib/qc";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { PrimaryButton, SecondaryButton, StatusBadge } from "@/components/ui";
+import { PrimaryButton, SecondaryButton, StatusBadge, WarningCard } from "@/components/ui";
 
 export function SavedScreen({
   record,
@@ -20,9 +20,14 @@ export function SavedScreen({
   onDashboard: () => void;
 }) {
   const savedTitle =
-    record.sync_status === "Pending sync" ? "Saved offline" : record.sync_status === "Failed" ? "Saved locally" : "Record saved";
+    record.sync_status === "Pending sync" ? "Record saved offline" : record.sync_status === "Failed" ? "Record saved locally" : "Record saved";
+  // Saving and processing are two different things — a green "saved" state
+  // must never read as if transcript/field processing also finished, since
+  // a failed recording still saves cleanly and still needs QC.
   const savedDetail =
-    record.sync_status === "Synced" ? "Record is ready for review and export." : "Record is safe on this phone.";
+    record.sync_status === "Synced" ? "The audio and answers are safely stored." : "The audio and answers are safely stored on this phone.";
+  const processingIncomplete = record.processing_status === "not_processed" || record.processing_status === "needs_qc";
+  const qcRequired = record.qc_status !== "Approved";
 
   return (
     <section className="mx-auto max-w-md text-center">
@@ -59,10 +64,19 @@ export function SavedScreen({
           />
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-sm opacity-70">Processing status</span>
+          <span className="text-sm opacity-70">Transcript/field processing</span>
           <StatusBadge label={processingStatusLabel(record.processing_status)} tone={processingStatusTone(record.processing_status)} />
         </div>
       </div>
+
+      {processingIncomplete && (
+        <div className="mt-4 text-left">
+          <WarningCard icon={<AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}>
+            Audio/transcript processing was not completed. The record is saved and requires QC.
+          </WarningCard>
+        </div>
+      )}
+      {qcRequired && <p className="mt-3 text-sm font-semibold text-[var(--warn)]">QC required before final reporting.</p>}
 
       <p className="mt-4 text-sm opacity-60">
         {syncMessage || "This record will sync automatically when a connection is available. You can keep testing offline."}

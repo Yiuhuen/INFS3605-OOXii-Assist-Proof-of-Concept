@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Languages, ListChecks, PencilLine, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, FlaskConical, Languages, ListChecks, PencilLine, RefreshCw, ShieldCheck } from "lucide-react";
 import type {
   CorrectionHistoryEntry,
   ProcessingStatus,
@@ -150,6 +150,7 @@ export function TranscriptScreen({
   unclearSegments,
   promptMarkers,
   missingPromptLabels,
+  unrecordedPromptLabels,
   isOnline,
   canGenerateDraft,
   onGenerateDraft,
@@ -162,7 +163,10 @@ export function TranscriptScreen({
   reviewStatus,
   onApplyCorrection,
   onIgnoreFlag,
-  onMarkFlagUnclear
+  onMarkFlagUnclear,
+  demoHelpersEnabled,
+  demoHelperUsed,
+  onInsertDemoTranscript
 }: {
   clientId: string;
   rawTranscript: string;
@@ -177,8 +181,10 @@ export function TranscriptScreen({
   recordingDurationSeconds: number;
   unclearSegments: UnclearSegment[];
   promptMarkers: PromptMarker[];
-  /** Client-facing prompt text for any fixed-sequence step the swipe card never showed while recording — never a reorder, just a gap to flag. */
+  /** Client-facing prompt text for any fixed-sequence step the tester never viewed at all — never a reorder, just a gap to flag. */
   missingPromptLabels: string[];
+  /** Client-facing prompt text for steps the tester DID view, but never while continuous audio recording was active (e.g. mic failure) — distinct from missingPromptLabels; must never be worded as "never shown". */
+  unrecordedPromptLabels: string[];
   isOnline: boolean;
   /** True when recording happened but no live transcript segments were captured — audio exists, so a manual rebuild is worth offering instead of leaving the tester stuck. */
   canGenerateDraft: boolean;
@@ -193,6 +199,11 @@ export function TranscriptScreen({
   onApplyCorrection: (correction: SuggestedCorrection) => void;
   onIgnoreFlag: (flagId: string) => void;
   onMarkFlagUnclear: (flag: TranscriptQualityFlag) => void;
+  /** True only in a local dev build, or when an operator has explicitly opted in via NEXT_PUBLIC_DEMO_HELPERS=true — see lib/demoHelpers.ts. Hidden in a normal deployment. */
+  demoHelpersEnabled: boolean;
+  /** True once "Insert sample transcript for demo" has been used on this in-progress record — never set by real recording/STT. */
+  demoHelperUsed: boolean;
+  onInsertDemoTranscript: () => void;
 }) {
   const allFlags = [...qualityReport.flags, ...translationReport.flags];
   const correctionsByFlagId = new Map(qualityReport.suggestedCorrections.map((correction) => [correction.relatedFlagId, correction]));
@@ -206,7 +217,12 @@ export function TranscriptScreen({
   // panel when it's an actual translation-review artifact for a non-English
   // record, i.e. when it genuinely differs from the raw transcript.
   const showEnglishProcessingCopy = translationReport.isTranslation || englishProcessingTranscript.trim() !== rawTranscript.trim();
-  const hasRecordingNotes = Boolean(manualOverrideReason.trim()) || canGenerateDraft || unclearSegments.length > 0 || missingPromptLabels.length > 0;
+  const hasRecordingNotes =
+    Boolean(manualOverrideReason.trim()) ||
+    canGenerateDraft ||
+    unclearSegments.length > 0 ||
+    missingPromptLabels.length > 0 ||
+    unrecordedPromptLabels.length > 0;
 
   return (
     <section>
@@ -233,6 +249,9 @@ export function TranscriptScreen({
           <StatusBadge label="Needs QC" tone="danger" icon={<AlertTriangle className="h-3.5 w-3.5" />} />
         )}
         <StatusBadge label={`Review: ${REVIEW_STATUS_LABELS[reviewStatus]}`} tone={REVIEW_STATUS_TONES[reviewStatus]} />
+        {demoHelperUsed && (
+          <StatusBadge label="Demo helper used — review required" tone="danger" icon={<FlaskConical className="h-3.5 w-3.5" />} />
+        )}
       </div>
 
       {hasRecordingNotes && (
@@ -259,8 +278,14 @@ export function TranscriptScreen({
           )}
           {missingPromptLabels.length > 0 && (
             <p className="opacity-80">
-              {missingPromptLabels.length} prompt{missingPromptLabels.length === 1 ? "" : "s"} never shown — flagged for QC:{" "}
+              {missingPromptLabels.length} prompt{missingPromptLabels.length === 1 ? "" : "s"} not viewed — flagged for QC:{" "}
               {missingPromptLabels.join(" · ")}
+            </p>
+          )}
+          {unrecordedPromptLabels.length > 0 && (
+            <p className="opacity-80">
+              {unrecordedPromptLabels.length} prompt{unrecordedPromptLabels.length === 1 ? "" : "s"} viewed but not captured in
+              audio because recording failed — flagged for QC: {unrecordedPromptLabels.join(" · ")}
             </p>
           )}
         </div>
@@ -333,12 +358,29 @@ export function TranscriptScreen({
         </>
       )}
 
+      {demoHelpersEnabled && (
+        <div className="mt-5 rounded-2xl border border-dashed border-[var(--gold)] bg-field-surface p-3">
+          <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-[var(--gold)]">
+            <FlaskConical className="h-3.5 w-3.5" />
+            Demo helper — not generated from audio
+          </p>
+          <p className="mt-1 text-xs opacity-70">
+            Fills the corrected transcript below with a fixed sample sentence, for rehearsing a demo. It never touches the
+            raw transcript above, and always flags this record for QC review.
+          </p>
+          <SecondaryButton className="mt-2 py-2 text-xs" onClick={onInsertDemoTranscript}>
+            Insert sample transcript for demo
+          </SecondaryButton>
+        </div>
+      )}
+
       <div className="mt-5 flex items-center justify-between">
         <p className="text-xs font-bold uppercase tracking-wide text-field-muted">Corrected transcript — tester-reviewed</p>
         <StatusBadge label="Editable" tone="warn" icon={<PencilLine className="h-3.5 w-3.5" />} />
       </div>
       <textarea
         className="field-input mt-2 min-h-32"
+        aria-label="Corrected transcript"
         value={correctedTranscript}
         onChange={(event) => setCorrectedTranscript(event.target.value)}
       />
@@ -362,7 +404,7 @@ export function TranscriptScreen({
 
       <div className="mt-4">
         <InfoCard icon={<ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />}>
-          Audio is the source record — the raw transcript is never edited. Suggestions only ever change the corrected copy below.
+          Audio is the source record — the raw transcript is never edited. Suggestions only ever change the corrected transcript.
         </InfoCard>
       </div>
 

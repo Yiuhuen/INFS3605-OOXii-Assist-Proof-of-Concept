@@ -64,11 +64,13 @@ export function evaluateNeedsQc({
   manualFallbackUsed,
   hasUnclearSegments = false,
   hasUnvisitedPrompts = false,
+  hasUnrecordedViewedPrompts = false,
   transcriptQualityRisk = "low",
   hasClinicalCorrection = false,
   translationReviewRequired = false,
   extractionUnsafe = false,
-  fieldsRequireReviewUnconfirmed = false
+  fieldsRequireReviewUnconfirmed = false,
+  demoHelperUsed = false
 }: {
   recordingStatus: RecordingStatus;
   editedByUser: boolean;
@@ -79,6 +81,8 @@ export function evaluateNeedsQc({
   hasUnclearSegments?: boolean;
   /** True when the tester finished/saved without the swipe-card ever showing one or more of the fixed clinical prompts — the sequence itself is never skipped, but a QC reviewer should confirm the gap. */
   hasUnvisitedPrompts?: boolean;
+  /** True when one or more prompts WERE shown to the tester but never while continuous audio recording was active (e.g. mic failure, or paused) — distinct from hasUnvisitedPrompts; never reported as "never shown". */
+  hasUnrecordedViewedPrompts?: boolean;
   /** Overall transcript-content risk from lib/transcriptQuality.ts — see analyseTranscriptQuality. Medium/high always forces QC. */
   transcriptQualityRisk?: TranscriptQualityRisk;
   /** True when an applied suggested correction touched a clinically significant term (eye-side, can/cannot, comfort, cataract, final line, glasses). */
@@ -89,6 +93,8 @@ export function evaluateNeedsQc({
   extractionUnsafe?: boolean;
   /** True when at least one draft-extracted field is flagged requiresReview and the tester has not ticked "Fields reviewed" — see lib/fieldExtraction.ts and the CapturedFieldsScreen confirmation. */
   fieldsRequireReviewUnconfirmed?: boolean;
+  /** True when the dev/demo-only "Insert sample transcript for demo" helper (lib/demoHelpers.ts) supplied this record's transcript — always forces QC, since it never came from real recording/STT. */
+  demoHelperUsed?: boolean;
 }): boolean {
   return (
     recordingStatus !== "recorded" ||
@@ -99,11 +105,13 @@ export function evaluateNeedsQc({
     manualFallbackUsed ||
     hasUnclearSegments ||
     hasUnvisitedPrompts ||
+    hasUnrecordedViewedPrompts ||
     transcriptQualityRisk !== "low" ||
     hasClinicalCorrection ||
     translationReviewRequired ||
     extractionUnsafe ||
-    fieldsRequireReviewUnconfirmed
+    fieldsRequireReviewUnconfirmed ||
+    demoHelperUsed
   );
 }
 
@@ -206,6 +214,7 @@ export function recordNeedsQc(record: TestRecord) {
     recordingIncomplete(record) ||
     hasUnclearSegments(record) ||
     record.has_unvisited_prompts ||
+    record.has_unrecorded_viewed_prompts ||
     record.qc_status === "Unreviewed" ||
     record.sync_status === "Pending sync" ||
     record.sync_status === "Failed" ||
@@ -213,7 +222,8 @@ export function recordNeedsQc(record: TestRecord) {
     hasUnresolvedCriticalTranscriptFlag(record) ||
     record.translation_review_required ||
     record.extraction_safety_status === "draft_review_required" ||
-    record.corrections_applied.some((correction) => correction.affectsClinicalMeaning)
+    record.corrections_applied.some((correction) => correction.affectsClinicalMeaning) ||
+    record.demo_helper_used
   );
 }
 
@@ -248,7 +258,14 @@ function buildCategorizedQcReasons(record: TestRecord): CategorizedQcReason[] {
       reason: `${record.unclear_segments.length} unclear section${record.unclear_segments.length === 1 ? "" : "s"}`
     });
   }
-  if (record.has_unvisited_prompts) reasons.push({ category: "Recording & manual fallback", reason: "Prompt(s) not shown" });
+  if (record.has_unvisited_prompts) reasons.push({ category: "Recording & manual fallback", reason: "Prompt(s) not viewed" });
+  if (record.has_unrecorded_viewed_prompts) {
+    reasons.push({
+      category: "Recording & manual fallback",
+      reason: "Prompt(s) viewed but not captured in audio because recording failed"
+    });
+  }
+  if (record.demo_helper_used) reasons.push({ category: "Recording & manual fallback", reason: "Demo helper used — review required" });
 
   if (isLowConfidence(record)) reasons.push({ category: "Missing & edited fields", reason: "Low confidence" });
   if (hasMissingFields(record)) reasons.push({ category: "Missing & edited fields", reason: "Missing fields" });

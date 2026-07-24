@@ -322,20 +322,44 @@ function mentionsOppositeEye(sentence: string, oppositePhrases: string[]): boole
   return oppositePhrases.some((phrase) => phraseRegex(phrase).test(sentence));
 }
 
-function buildEyeLineRegexes(phrases: string[]) {
+const NUMBER_ALT = `\\d+|${NUMBER_WORD_ALTERNATION}`;
+const LINE_NUM_GROUP = `line\\s*(?:number\\s*)?(${NUMBER_ALT})`;
+/** "can read"/"can see"/"reads"/"sees"/"has"/"got"/"reports" — the verb link required by sideVerbLine below. Deliberately excludes conjunctions like "and", which is exactly what let a neighbouring clause about the OTHER eye win the old proximity race (see the regression this replaces). */
+const EYE_VERB_ALT = "can\\s+(?:read|see)|reads?|sees?|has|got|reports?";
+
+/**
+ * Three explicit, tightly-scoped grammatical constructions, tried in this
+ * order, so "line six with the right eye and line five with the left eye"
+ * can never resolve the right eye to the wrong, textually-closer "line
+ * five" — each pattern requires a real connector (a preposition or a verb),
+ * never a bare character-count window a neighbouring clause could win by
+ * being a few characters shorter.
+ */
+function buildEyeLinePatterns(phrases: string[]) {
   const alt = phrases.map(escapeRegex).join("|");
-  const numberAlt = `\\d+|${NUMBER_WORD_ALTERNATION}`;
   return {
-    sideFirst: new RegExp(`\\b(?:${alt})\\b[^.\\n]{0,60}?\\bline\\s*(?:number\\s*)?(${numberAlt})\\b`, "i"),
-    lineFirst: new RegExp(`\\bline\\s*(?:number\\s*)?(${numberAlt})\\b[^.\\n]{0,60}?\\b(?:${alt})\\b`, "i")
+    // "line six with the right eye" / "line six using right eye"
+    lineWithSide: new RegExp(`\\b${LINE_NUM_GROUP}\\b\\s*(?:with(?:\\s+the)?|using(?:\\s+the)?)\\s+(?:${alt})\\b`, "i"),
+    // "with the left eye, line four" / "with the left eye line four"
+    sideCommaLine: new RegExp(`\\bwith\\s+the\\s+(?:${alt})\\b\\s*,?\\s*${LINE_NUM_GROUP}\\b`, "i"),
+    // "right eye reads line six" / "right eye can read line five" / "right eye can see line 6"
+    sideVerbLine: new RegExp(`\\b(?:${alt})\\b\\s*(?:${EYE_VERB_ALT})\\b[^.\\n]{0,15}?\\b${LINE_NUM_GROUP}\\b`, "i"),
+    // Loose fallback (either order, wider window) — last resort only, for
+    // phrasing none of the three explicit constructions above cover.
+    sideFirstWide: new RegExp(`\\b(?:${alt})\\b[^.\\n]{0,30}?\\b${LINE_NUM_GROUP}\\b`, "i"),
+    lineFirstWide: new RegExp(`\\b${LINE_NUM_GROUP}\\b[^.\\n]{0,30}?\\b(?:${alt})\\b`, "i")
   };
 }
 
 function findEyeLine(text: string, phrases: string[]): { value: string; evidence: string; index: number } | null {
-  const { sideFirst, lineFirst } = buildEyeLineRegexes(phrases);
-  const sideMatch = sideFirst.exec(text);
+  const patterns = buildEyeLinePatterns(phrases);
+  for (const pattern of [patterns.lineWithSide, patterns.sideCommaLine, patterns.sideVerbLine]) {
+    const match = pattern.exec(text);
+    if (match) return { value: `Line ${parseLineNumber(match[1])}`, evidence: match[0].trim(), index: match.index };
+  }
+  const sideMatch = patterns.sideFirstWide.exec(text);
   if (sideMatch) return { value: `Line ${parseLineNumber(sideMatch[1])}`, evidence: sideMatch[0].trim(), index: sideMatch.index };
-  const lineMatch = lineFirst.exec(text);
+  const lineMatch = patterns.lineFirstWide.exec(text);
   if (lineMatch) return { value: `Line ${parseLineNumber(lineMatch[1])}`, evidence: lineMatch[0].trim(), index: lineMatch.index };
   return null;
 }
@@ -721,6 +745,76 @@ const SELF_TEST_CASES: SelfTestCase[] = [
       if (result.left_eye_distance_result.value !== "Line 4" || result.left_eye_distance_result.confidence !== "high") {
         return `expected left eye Line 4/high, got ${result.left_eye_distance_result.value}/${result.left_eye_distance_result.confidence}`;
       }
+      return null;
+    }
+  },
+  {
+    name: "FIX3-A: 'The right eye reads line six. The left eye reads line five.'",
+    input: {
+      rawTranscriptText: "The right eye reads line six. The left eye reads line five.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.right_eye_distance_result.value !== "Line 6") return `expected right eye Line 6, got ${result.right_eye_distance_result.value}`;
+      if (result.left_eye_distance_result.value !== "Line 5") return `expected left eye Line 5, got ${result.left_eye_distance_result.value}`;
+      return null;
+    }
+  },
+  {
+    name: "FIX3-B: 'Line six with the right eye and line five with the left eye.' (right must not swap to Line 5)",
+    input: {
+      rawTranscriptText: "Line six with the right eye and line five with the left eye.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.right_eye_distance_result.value !== "Line 6") return `expected right eye Line 6, got ${result.right_eye_distance_result.value}`;
+      if (result.left_eye_distance_result.value !== "Line 5") return `expected left eye Line 5, got ${result.left_eye_distance_result.value}`;
+      return null;
+    }
+  },
+  {
+    name: "FIX3-C: 'With the left eye, line four. With the right eye, line five.'",
+    input: {
+      rawTranscriptText: "With the left eye, line four. With the right eye, line five.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.left_eye_distance_result.value !== "Line 4") return `expected left eye Line 4, got ${result.left_eye_distance_result.value}`;
+      if (result.right_eye_distance_result.value !== "Line 5") return `expected right eye Line 5, got ${result.right_eye_distance_result.value}`;
+      return null;
+    }
+  },
+  {
+    name: "FIX3-D: 'The right eye reads line five. The left eye reads line four.'",
+    input: {
+      rawTranscriptText: "The right eye reads line five. The left eye reads line four.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.right_eye_distance_result.value !== "Line 5") return `expected right eye Line 5, got ${result.right_eye_distance_result.value}`;
+      if (result.left_eye_distance_result.value !== "Line 4") return `expected left eye Line 4, got ${result.left_eye_distance_result.value}`;
+      return null;
+    }
+  },
+  {
+    name: "FIX3-E: 'The write eye reads line five.' — misheard alias must still require review, never silently confirmed",
+    input: {
+      rawTranscriptText: "The write eye reads line five.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (!result.right_eye_distance_result.requiresReview) return "expected right eye requiresReview true for misheard alias";
+      if (result.right_eye_distance_result.confidence === "high") return "expected right eye confidence not high for misheard alias";
       return null;
     }
   }

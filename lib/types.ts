@@ -132,8 +132,10 @@ export interface TestRecord {
   transcript_segments: TranscriptSegment[];
   /** Markers recorded each time the tester moved to a new prompt during the recording. */
   prompt_markers: PromptMarker[];
-  /** True when one or more prompts in the active pack's fixed clinical sequence were never shown while recording — the sequence itself was never reordered/skipped, but a QC reviewer should confirm the gap. Derived from prompt_markers vs. the pack at save time. */
+  /** True when one or more prompts in the active pack's fixed clinical sequence were never shown to the tester at all (no prompt_markers entry for that step, regardless of recording state) — the sequence itself was never reordered/skipped, but a QC reviewer should confirm the gap. Derived from prompt_markers vs. the pack at save time. */
   has_unvisited_prompts: boolean;
+  /** True when one or more prompts WERE shown to the tester but never while continuous audio recording was active (e.g. the microphone failed, or recording was paused) — distinct from has_unvisited_prompts, since a prompt can be honestly viewed without ever being captured in audio. Derived from prompt_markers' capturedDuringRecording flags at save time. */
+  has_unrecorded_viewed_prompts: boolean;
   /** Moments the tester flagged as unclear during recording — always require QC review. */
   unclear_segments: UnclearSegment[];
   /** Optional tester/QC edited transcript. Raw transcript is preserved separately. */
@@ -171,6 +173,8 @@ export interface TestRecord {
   extraction_safety_status: ExtractionSafetyStatus;
   /** True once the tester has explicitly confirmed "Fields reviewed" on the Review captured fields screen. Draft-extracted fields that still require review keep the record in QC until this is set — see lib/qc.ts evaluateNeedsQc. */
   fields_reviewed_by_tester: boolean;
+  /** True when the dev/demo-only "Insert sample transcript for demo" helper (see lib/demoHelpers.ts) was used on this record. Never set by real recording/STT — always forces QC review and is surfaced in the audit export. */
+  demo_helper_used: boolean;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;
@@ -200,6 +204,16 @@ export interface PromptMarker {
   promptText: string;
   language: LanguageCode;
   navigationAction: PromptNavigationAction;
+  /**
+   * True when continuous audio recording (MediaRecorder) was active at the
+   * moment the tester was shown this prompt — false when the card was merely
+   * viewed (e.g. mic access failed, or recording was paused). A marker
+   * always exists once a prompt has been viewed, regardless of this flag, so
+   * "the tester saw this prompt" and "audio was captured while they saw it"
+   * are never conflated — see has_unvisited_prompts vs.
+   * has_unrecorded_viewed_prompts on TestRecord.
+   */
+  capturedDuringRecording: boolean;
   createdAt: string;
 }
 

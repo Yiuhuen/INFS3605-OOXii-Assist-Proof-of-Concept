@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Globe, RefreshCw, ShieldCheck, Video } from "lucide-react";
 import type { LanguagePack, Tester } from "@/lib/types";
-import { CheckboxCard, PrimaryButton, ProgressBar } from "@/components/ui";
+import { CheckboxCard, PrimaryButton } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 const reasons = [
@@ -43,11 +43,6 @@ export function TrainingScreen({
         </div>
       </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <ProgressBar steps={3} current={0} />
-        <span className="shrink-0 text-xs font-bold uppercase tracking-wide opacity-60">Part 1 of 3</span>
-      </div>
-
       <div className="mt-6 space-y-3">
         {reasons.map(({ icon: Icon, text }) => (
           <div key={text} className="field-card flex items-center gap-3 py-3">
@@ -63,7 +58,7 @@ export function TrainingScreen({
         <CheckboxCard
           checked={confirmed}
           onToggle={() => setConfirmed((value) => !value)}
-          label="I have watched the training guide and I am ready to test."
+          label="I have read the training summary and I am ready to test."
         />
       </div>
 

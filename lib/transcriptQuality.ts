@@ -5,11 +5,7 @@ import {
   STEP_EXPECTED_TERMS
 } from "./domainLexicon";
 import {
-  UNKNOWN_FIELD_VALUE,
   type ExtractionSafetyStatus,
-  type FieldConfidence,
-  type FieldConfidenceLevel,
-  type FieldConfidenceMap,
   type ManualExtractedFields,
   type SuggestedCorrection,
   type TranscriptQualityFlag,
@@ -301,51 +297,6 @@ export function correctionAffectsClinicalMeaning(correction: Pick<SuggestedCorre
 
 export function deriveExtractionSafetyStatus(qualityReport: TranscriptQualityReport, translationReport: TranslationSafetyReport): ExtractionSafetyStatus {
   return qualityReport.unsafeForAutoExtraction || translationReport.unsafeForAutoExtraction ? "draft_review_required" : "safe";
-}
-
-/**
- * Builds per-field draft-quality metadata for the high-risk clinical fields
- * (spec §7) without ever blocking draft extraction — an unsafe/uncertain
- * transcript still produces a labelled draft, it just gets marked for review
- * instead of trusted silently.
- */
-export function buildFieldConfidence(
-  fields: ManualExtractedFields,
-  qualityReport: TranscriptQualityReport,
-  translationReport: TranslationSafetyReport,
-  source: FieldConfidence["source"]
-): FieldConfidenceMap {
-  const unsafe = qualityReport.unsafeForAutoExtraction || translationReport.unsafeForAutoExtraction;
-  const map: FieldConfidenceMap = {};
-
-  (Object.keys(fields) as Array<keyof ManualExtractedFields>).forEach((key) => {
-    const value = String(fields[key] ?? "").trim();
-    const isHighRisk = (HIGH_RISK_EXTRACTED_FIELDS as string[]).includes(key);
-    const isEmpty = !value || value === UNKNOWN_FIELD_VALUE;
-
-    let confidence: FieldConfidenceLevel;
-    let requiresReview = false;
-    let reason: string | undefined;
-
-    if (isEmpty) {
-      confidence = "unknown";
-      requiresReview = isHighRisk;
-      reason = isHighRisk ? "Not captured — high-risk clinical field." : undefined;
-    } else if (isHighRisk && unsafe) {
-      confidence = "low";
-      requiresReview = true;
-      reason = "Transcript quality or translation risk was flagged for this record — verify against the audio.";
-    } else if (isHighRisk) {
-      confidence = "medium";
-      requiresReview = qualityReport.requiresQc || translationReport.requiresQc;
-    } else {
-      confidence = "high";
-    }
-
-    map[key] = { value, source, confidence, requiresReview, reason };
-  });
-
-  return map;
 }
 
 interface SelfTestCase {

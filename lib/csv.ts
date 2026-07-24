@@ -84,6 +84,7 @@ export const AUDIT_CSV_COLUMNS = [
   "unclear_segments",
   "prompt_markers",
   "has_unvisited_prompts",
+  "has_unrecorded_viewed_prompts",
   "processing_status",
   "sync_attempts",
   "transcript_quality_risk",
@@ -95,20 +96,26 @@ export const AUDIT_CSV_COLUMNS = [
   "right_eye_distance_result_source",
   "right_eye_distance_result_confidence",
   "right_eye_distance_result_evidence",
+  "right_eye_distance_result_edited",
   "left_eye_distance_result_source",
   "left_eye_distance_result_confidence",
   "left_eye_distance_result_evidence",
+  "left_eye_distance_result_edited",
   "final_readable_line_source",
   "final_readable_line_confidence",
   "final_readable_line_evidence",
+  "final_readable_line_edited",
   "glasses_selected_source",
   "glasses_selected_confidence",
   "glasses_selected_evidence",
+  "glasses_selected_edited",
   "comfort_response_source",
   "comfort_response_confidence",
   "comfort_response_evidence",
+  "comfort_response_edited",
   "extraction_safety_status",
   "fields_reviewed_by_tester",
+  "demo_helper_used",
   "created_at",
   "updated_at"
 ] as const;
@@ -122,9 +129,9 @@ const AUDIT_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
   "comfort_response"
 ];
 
-function fieldConfidenceColumns(meta: FieldConfidence | undefined): [string, string, string] {
-  if (!meta) return ["", "", ""];
-  return [meta.source, meta.confidence, meta.evidence ?? ""];
+function fieldConfidenceColumns(meta: FieldConfidence | undefined): [string, string, string, string] {
+  if (!meta) return ["", "", "", ""];
+  return [meta.source, meta.confidence, meta.evidence ?? "", meta.source === "manual" ? "yes" : "no"];
 }
 
 function auditRow(record: TestRecord) {
@@ -147,6 +154,7 @@ function auditRow(record: TestRecord) {
     JSON.stringify(record.unclear_segments),
     JSON.stringify(record.prompt_markers),
     record.has_unvisited_prompts ? "yes" : "no",
+    record.has_unrecorded_viewed_prompts ? "yes" : "no",
     record.processing_status,
     record.sync_attempts,
     record.transcript_quality_risk,
@@ -158,6 +166,7 @@ function auditRow(record: TestRecord) {
     ...fieldConfidenceColumnsForRecord,
     record.extraction_safety_status,
     record.fields_reviewed_by_tester ? "yes" : "no",
+    record.demo_helper_used ? "yes" : "no",
     record.created_at,
     record.updated_at
   ];

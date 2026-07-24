@@ -3,12 +3,10 @@
 import { useState } from "react";
 import { Check, Download, ShieldCheck } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
-import type { InsightTargetPage } from "@/lib/insights";
-import { AUDIT_CSV_COLUMNS, LONGLIST_CSV_COLUMNS } from "@/lib/csv";
+import { LONGLIST_CSV_COLUMNS } from "@/lib/csv";
 import { recordNeedsQc } from "@/lib/qc";
 import { DangerButton, Disclosure, InfoCard, MetricCard, PrimaryButton, SecondaryButton, WarningCard } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { ActionableInsightsPreview } from "@/components/screens/InsightsScreen";
 
 /** "id"/"qc" are acronyms and stay fully uppercase; only the first word is otherwise capitalised (sentence case) — matches column names used elsewhere in the app. */
 const ACRONYM_WORDS = new Set(["id", "qc"]);
@@ -46,7 +44,15 @@ const AUDIT_FIELD_GROUPS: Array<{ title: string; fields: readonly string[] }> = 
   },
   {
     title: "QC and confidence fields",
-    fields: ["confidence_score", "missing_fields", "edited_by_user", "requires_qc_verification", "unclear_segments", "has_unvisited_prompts"]
+    fields: [
+      "confidence_score",
+      "missing_fields",
+      "edited_by_user",
+      "requires_qc_verification",
+      "unclear_segments",
+      "has_unvisited_prompts",
+      "demo_helper_used"
+    ]
   },
   { title: "Recording fields", fields: ["recording_status", "manual_override_reason", "prompt_markers"] },
   { title: "Sync and timestamp fields", fields: ["processing_status", "sync_attempts", "created_at", "updated_at"] }
@@ -59,8 +65,6 @@ export function ExportScreen({
   onExportAudit,
   onClear,
   onReviewQc,
-  onInsights,
-  onInsightNavigate,
   onBack
 }: {
   records: TestRecord[];
@@ -69,8 +73,6 @@ export function ExportScreen({
   onExportAudit: () => void;
   onClear: () => void;
   onReviewQc: () => void;
-  onInsights: () => void;
-  onInsightNavigate: (target: InsightTargetPage) => void;
   onBack: () => void;
 }) {
   const pending = records.filter((record) => record.sync_status === "Pending sync").length;
@@ -103,7 +105,9 @@ export function ExportScreen({
             Core operational dataset for stock, QC, and reporting. Includes captured test fields and statuses. No raw
             transcript text. Anonymous client IDs only.
           </p>
-          <FieldChecklist fields={LONGLIST_CSV_COLUMNS} />
+          <Disclosure label={`Included fields (${LONGLIST_CSV_COLUMNS.length})`}>
+            <FieldChecklist fields={LONGLIST_CSV_COLUMNS} />
+          </Disclosure>
           <PrimaryButton fullWidth className="mt-5" icon={<Download className="h-5 w-5" />} disabled={records.length === 0} onClick={onExportLonglist}>
             Download OOXii Data Longlist
           </PrimaryButton>
@@ -134,12 +138,6 @@ export function ExportScreen({
             Download Full Audit Longlist
           </PrimaryButton>
         </div>
-      </div>
-
-      {/* Insights follow the download actions — this screen's job is exporting;
-          quality signals are supporting context, not the headline. */}
-      <div className="mt-6">
-        <ActionableInsightsPreview records={records} onNavigate={onInsightNavigate} onSeeAll={onInsights} />
       </div>
 
       <div className="mt-6 space-y-3">

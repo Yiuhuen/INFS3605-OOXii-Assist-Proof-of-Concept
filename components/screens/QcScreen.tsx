@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
-import type { ExtractedFields, FieldConfidenceLevel, ManualExtractedFields, TestRecord } from "@/lib/types";
+import { UNKNOWN_FIELD_VALUE, type ExtractedFields, type FieldConfidenceLevel, type ManualExtractedFields, type TestRecord } from "@/lib/types";
 import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasonGroups, type QcFilter } from "@/lib/qc";
 import { FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
 import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
@@ -109,6 +109,7 @@ export function QcScreen({
                   <StatusBadge label={`${Math.round(record.confidence_score * 100)}% confidence`} tone={record.confidence_score < 0.7 ? "warn" : "good"} />
                   {record.missing_fields.length > 0 && <StatusBadge label={`${record.missing_fields.length} missing`} tone="warn" />}
                   {record.edited_by_user && <StatusBadge label="Edited" tone="warn" />}
+                  {record.demo_helper_used && <StatusBadge label="Demo helper used" tone="danger" />}
                   {record.recording_status !== "recorded" && <StatusBadge label="Recording issue" tone="warn" />}
                   {record.sync_status === "Pending sync" && <StatusBadge label="Pending sync" tone="warn" />}
                   {record.sync_status === "Failed" && <StatusBadge label="Sync failed" tone="danger" />}
@@ -137,6 +138,7 @@ export function QcScreen({
               label={`${Math.round(selected.confidence_score * 100)}% confidence`}
               tone={selected.confidence_score < 0.7 ? "warn" : "good"}
             />
+            {selected.demo_helper_used && <StatusBadge label="Demo helper used — review required" tone="danger" />}
           </div>
 
           {qcReasonGroups(selected).length > 0 && (
@@ -293,14 +295,18 @@ export function QcScreen({
                   <div key={key} className={missing ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}>
                     <TextAreaField
                       label={FIELD_DISPLAY_LABELS[key]}
-                      value={String(effective[key])}
+                      value={effective[key] === UNKNOWN_FIELD_VALUE ? "" : String(effective[key])}
+                      placeholder={missing ? "Not captured" : undefined}
                       onChange={(event) => updateRecord(selected, { [key]: event.target.value } as Partial<ExtractedFields>)}
                       rows={2}
                     />
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
                       {isHighRisk && <StatusBadge label="High-risk field" tone="neutral" />}
                       {fieldMeta && <StatusBadge label={`Source: ${SOURCE_LABELS[fieldMeta.source]}`} tone="neutral" />}
-                      {fieldMeta && <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />}
+                      {/* "Confidence: unknown" next to "Source: Not captured" says the same thing twice — only rate confidence when a value was captured. */}
+                      {fieldMeta && fieldMeta.confidence !== "unknown" && (
+                        <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />
+                      )}
                       {fieldMeta && (fieldMeta.requiresReview ? <StatusBadge label="Review required" tone="warn" /> : <StatusBadge label="Ready" tone="good" />)}
                     </div>
                     {fieldMeta?.evidence && <p className="mt-1 text-xs opacity-60">Evidence: &ldquo;{fieldMeta.evidence}&rdquo;</p>}

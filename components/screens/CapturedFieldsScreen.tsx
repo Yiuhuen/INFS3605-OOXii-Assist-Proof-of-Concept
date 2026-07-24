@@ -1,7 +1,7 @@
 "use client";
 
-import { Save, ShieldAlert, Sparkles, Zap } from "lucide-react";
-import type { ExtractedFields, ExtractionSafetyStatus, FieldConfidenceLevel, ManualExtractedFields, ProcessingStatus } from "@/lib/types";
+import { FlaskConical, Save, ShieldAlert, Sparkles, Zap } from "lucide-react";
+import { UNKNOWN_FIELD_VALUE, type ExtractedFields, type ExtractionSafetyStatus, type FieldConfidenceLevel, type ManualExtractedFields, type ProcessingStatus } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
 import { FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
 import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
@@ -37,7 +37,10 @@ export function CapturedFieldsScreen({
   onAutoFill,
   autoFillSummary,
   fieldsReviewedConfirmed,
-  onToggleFieldsReviewed
+  onToggleFieldsReviewed,
+  fieldSuggestions,
+  onUseSuggestion,
+  demoHelperUsed
 }: {
   clientId: string;
   extracted: ExtractedFields;
@@ -56,6 +59,11 @@ export function CapturedFieldsScreen({
   /** Tester's explicit "Fields reviewed" confirmation — see lib/qc.ts evaluateNeedsQc fieldsRequireReviewUnconfirmed. */
   fieldsReviewedConfirmed: boolean;
   onToggleFieldsReviewed: () => void;
+  /** Non-destructive transcript-derived values for fields the tester has already hand-edited — never auto-applied, see app/page.tsx autoFillFromTranscript. */
+  fieldSuggestions: Partial<Record<keyof ManualExtractedFields, string>>;
+  onUseSuggestion: (key: keyof ManualExtractedFields) => void;
+  /** True when the dev/demo-only "Insert sample transcript for demo" helper (lib/demoHelpers.ts) supplied this record's transcript — never set by real recording/STT. */
+  demoHelperUsed: boolean;
 }) {
   const effective = editedFields ?? extracted;
   const lowConfidence = effective.confidence_score < 0.7 || effective.missing_fields.length > 0;
@@ -83,6 +91,7 @@ export function CapturedFieldsScreen({
           Capture confidence: {Math.round(effective.confidence_score * 100)}%
         </span>
         {editedFields && <StatusBadge label="Edited — verify in QC" tone="warn" />}
+        {demoHelperUsed && <StatusBadge label="Demo helper used — review required" tone="danger" icon={<FlaskConical className="h-3.5 w-3.5" />} />}
         {/* processingStatusLabel already reads "Needs QC" in danger tone once processingStatus is "needs_qc" — only add this badge when it says something else (e.g. a not-yet-processed draft) so the same risk isn't shown twice. */}
         {qcRequired && processingStatus !== "needs_qc" && <StatusBadge label="Needs QC" tone="danger" />}
       </div>
@@ -125,33 +134,45 @@ export function CapturedFieldsScreen({
               </span>
               <input
                 className="field-input"
-                value={effective[key]}
+                value={effective[key] === UNKNOWN_FIELD_VALUE ? "" : effective[key]}
                 placeholder={missing ? "Not captured" : undefined}
                 onChange={(event) => onEditField(key, event.target.value)}
               />
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
                 {fieldMeta && <StatusBadge label={`Source: ${SOURCE_LABELS[fieldMeta.source]}`} tone="neutral" />}
-                {fieldMeta && <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />}
+                {/* "Confidence: unknown" next to "Source: Not captured" says the same thing twice — only show confidence when there is actually a captured value to rate. */}
+                {fieldMeta && fieldMeta.confidence !== "unknown" && (
+                  <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />
+                )}
                 {fieldMeta && (fieldMeta.requiresReview ? <StatusBadge label="Review required" tone="warn" /> : <StatusBadge label="Ready" tone="good" />)}
               </div>
               {fieldMeta?.evidence && <p className="mt-1 text-xs opacity-60">Evidence: &ldquo;{fieldMeta.evidence}&rdquo;</p>}
               {missing && isHighRisk ? (
-                <p className="mt-1 text-xs opacity-60">Not captured from transcript — enter manually or send to QC.</p>
+                <p className="mt-1 text-xs opacity-60">Not captured from transcript — enter manually or leave for QC.</p>
               ) : (
                 fieldMeta?.reason && flagConfidence && <p className="mt-1 text-xs opacity-60">{fieldMeta.reason}</p>
+              )}
+              {fieldSuggestions[key] && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-field-line bg-field-surface p-2 text-xs">
+                  <span className="opacity-80">
+                    Transcript suggests: <span className="font-bold">{fieldSuggestions[key]}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="font-bold text-[var(--gold)] underline-offset-2 hover:underline"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      onUseSuggestion(key);
+                    }}
+                  >
+                    Use suggestion
+                  </button>
+                </div>
               )}
             </label>
           );
         })}
       </div>
-
-      {effective.missing_fields.length > 0 && (
-        <div className="mt-3">
-          <WarningCard>
-            Missing: {effective.missing_fields.map((key) => FIELD_DISPLAY_LABELS[key as keyof ManualExtractedFields] ?? key).join(", ")}
-          </WarningCard>
-        </div>
-      )}
 
       <div className="mt-5">
         <InfoCard>Editing fields does not change the source transcript. Edited fields are flagged for QC review.</InfoCard>

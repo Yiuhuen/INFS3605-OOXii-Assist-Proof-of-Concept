@@ -1,9 +1,8 @@
 "use client";
 
-import { ArrowRight, Globe, LogOut, MoreHorizontal, Settings } from "lucide-react";
+import { ArrowRight, Globe, LogOut, MoreHorizontal } from "lucide-react";
 import type { LanguagePack, Tester } from "@/lib/types";
 import type { NextAction } from "@/lib/workflow";
-import { contrastLabels, type DisplaySettings } from "@/lib/settings";
 import { OfflineBadge, PrimaryButton, SecondaryButton, StatusBadge, WorkflowProgressRow } from "@/components/ui";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 
@@ -27,7 +26,6 @@ export function Dashboard({
   tester,
   activePack,
   isOnline,
-  displaySettings,
   nextAction,
   recordsNeedingQc,
   recordsPendingSync,
@@ -38,7 +36,6 @@ export function Dashboard({
   tester: Tester;
   activePack: LanguagePack;
   isOnline: boolean;
-  displaySettings: DisplaySettings;
   nextAction: NextAction;
   recordsNeedingQc: number;
   recordsPendingSync: number;
@@ -96,14 +93,10 @@ export function Dashboard({
         </PrimaryButton>
       </div>
 
-      <div className="mt-10 space-y-3">
+      <div className="mt-10">
         <SecondaryButton fullWidth icon={<MoreHorizontal className="h-4 w-4" />} onClick={onMore}>
           More
         </SecondaryButton>
-        <p className="flex items-center justify-center gap-1.5 text-center text-xs opacity-50">
-          <Settings className="h-3 w-3" />
-          Display: {contrastLabels[displaySettings.contrast]}
-        </p>
       </div>
     </section>
   );

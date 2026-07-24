@@ -10,8 +10,8 @@ import {
   HelpCircle,
   Mic,
   Pause,
+  PencilLine,
   Play,
-  RotateCcw,
   Square,
   Volume2,
   VolumeX
@@ -94,6 +94,15 @@ function useSwipeCard({
     if (target.closest(INTERACTIVE_SELECTOR)) return;
     gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY };
     setDragging(true);
+    // Without pointer capture, a finger that drifts slightly off the card
+    // mid-drag (very easy on a real phone) stops delivering pointermove/up
+    // to this element — the gesture silently dies, which reads as "swipe
+    // doesn't work" even though the handlers are firing correctly.
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Unsupported in this environment — gesture still works, just less robust to drift.
+    }
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -108,8 +117,17 @@ function useSwipeCard({
     }
   }
 
+  function releaseCapture(event: ReactPointerEvent<HTMLDivElement>) {
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Not captured — ignore.
+    }
+  }
+
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const gesture = gestureRef.current;
+    releaseCapture(event);
     if (!gesture || gesture.pointerId !== event.pointerId) {
       reset();
       return;
@@ -122,6 +140,11 @@ function useSwipeCard({
     else onSwipeRight();
   }
 
+  function onPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    releaseCapture(event);
+    reset();
+  }
+
   return {
     dragX,
     dragging,
@@ -129,7 +152,7 @@ function useSwipeCard({
       onPointerDown,
       onPointerMove,
       onPointerUp,
-      onPointerCancel: reset
+      onPointerCancel
     }
   };
 }
@@ -162,8 +185,7 @@ function CompactPromptCard({
   isAudioMode,
   voiceInfoMessage,
   speechAvailable,
-  onPlayToggle,
-  onReplay
+  onPlayToggle
 }: {
   step: PromptStep;
   stepIndex: number;
@@ -176,7 +198,6 @@ function CompactPromptCard({
   voiceInfoMessage: string | null;
   speechAvailable: boolean;
   onPlayToggle: () => void;
-  onReplay: () => void;
 }) {
   const [whyOpen, setWhyOpen] = useState(false);
 
@@ -211,21 +232,12 @@ function CompactPromptCard({
           {isSpeaking ? "Stop speaking" : "Play aloud"}
         </button>
         {isSpeaking && <StatusBadge label={isAudioMode ? "Recorded audio" : "Speaking…"} tone="warn" />}
-        {!isSpeaking && speechAvailable && (
-          <button type="button" className="chip-button" onClick={onReplay} title="Replay from the start">
-            <RotateCcw className="h-3.5 w-3.5" />
-            Replay
-          </button>
-        )}
         <button type="button" className={`chip-button ${whyOpen ? "is-active" : ""}`} onClick={() => setWhyOpen((value) => !value)} aria-expanded={whyOpen}>
           <HelpCircle className="h-3.5 w-3.5" />
           Why this matters
         </button>
       </div>
-      <p className="mt-1.5 text-[11px] opacity-50">
-        Speaks the client-facing prompt only.
-        {voiceInfoMessage && ` ${voiceInfoMessage}.`}
-      </p>
+      {voiceInfoMessage && <p className="mt-1 text-[11px] opacity-50">{voiceInfoMessage}.</p>}
       {whyOpen && <p className="mt-2 text-xs leading-relaxed opacity-70">{step.why_this_matters}</p>}
     </div>
   );
@@ -262,10 +274,10 @@ function deriveTranscriptPanelStatus({
     return { label: "No transcript captured", tone: "warn" };
   }
   if (interimText) {
-    return { label: "Transcript updating…", tone: "warn" };
+    return { label: "Transcript updating…", tone: "neutral" };
   }
   if (recording && segments.length === 0) {
-    return { label: "Listening…", tone: "warn" };
+    return { label: "Listening…", tone: "neutral" };
   }
   if (engineStatus === "restarting") {
     return { label: "Reconnecting…", tone: "warn" };
@@ -273,7 +285,7 @@ function deriveTranscriptPanelStatus({
   if (paused) {
     return { label: "Paused", tone: "neutral" };
   }
-  return { label: "Listening…", tone: "warn" };
+  return { label: "Listening…", tone: "neutral" };
 }
 
 /**
@@ -290,7 +302,6 @@ function LiveTranscriptPanel({
   recording,
   paused,
   recordingStatus,
-  languageName,
   engineStatus,
   unclearSegments,
   manualTranscriptNote,
@@ -303,7 +314,6 @@ function LiveTranscriptPanel({
   recording: boolean;
   paused: boolean;
   recordingStatus: RecordingStatus;
-  languageName: string;
   engineStatus: TranscriptEngineStatus;
   unclearSegments: UnclearSegment[];
   manualTranscriptNote: string;
@@ -313,16 +323,38 @@ function LiveTranscriptPanel({
   const status = deriveTranscriptPanelStatus({ recording, paused, recordingStatus, segments, interimText, engineStatus });
   const unavailableMessage =
     transcriptUnavailableReason === "language"
-      ? "Live transcript is not available for this language in the PoC. Audio is still saved."
-      : "Live transcript unavailable in this browser. Audio is still saved.";
+      ? "Not available for this language in the PoC. Audio is still saved."
+      : "Unavailable in this browser. Audio is still saved.";
+  const [manualOpen, setManualOpen] = useState(false);
 
   // Compact by design: this panel is a live draft glance, not the archive —
   // only the most recent lines are shown so the screen never needs its own
-  // internal scrollbar. The full transcript (every segment, in order) is
-  // always available afterwards on Transcript Review.
-  const RECENT_LINE_COUNT = 5;
+  // internal scrollbar, and never grows past the "core visible" viewport
+  // budget. The full transcript (every segment, in order) is always
+  // available afterwards on Transcript Review.
+  const RECENT_LINE_COUNT = 2;
   const recentSegments = segments.slice(-RECENT_LINE_COUNT);
   const olderSegmentCount = segments.length - recentSegments.length;
+
+  function manualEntryToggleOrField(placeholder: string) {
+    if (manualOpen) {
+      return (
+        <TextAreaField
+          label="Manual transcript entry"
+          value={manualTranscriptNote}
+          onChange={(event) => onManualTranscriptNoteChange(event.target.value)}
+          placeholder={placeholder}
+          rows={2}
+        />
+      );
+    }
+    return (
+      <button type="button" className="chip-button" onClick={() => setManualOpen(true)}>
+        <PencilLine className="h-3.5 w-3.5" />
+        Add manual transcript
+      </button>
+    );
+  }
 
   return (
     <div className="field-card mt-3 p-3">
@@ -334,25 +366,13 @@ function LiveTranscriptPanel({
           </span>
           Live transcript
         </p>
-        <div className="flex items-center gap-1.5">
-          <StatusBadge label={languageName} tone="language" />
-        </div>
-      </div>
-
-      <div className="mt-1.5">
         <StatusBadge label={status.label} tone={status.tone} />
       </div>
 
       {transcriptUnavailable ? (
         <div className="mt-2 space-y-2">
           <WarningCard>{unavailableMessage}</WarningCard>
-          <TextAreaField
-            label="Manual transcript entry"
-            value={manualTranscriptNote}
-            onChange={(event) => onManualTranscriptNoteChange(event.target.value)}
-            placeholder="Type what the client said, since live transcript isn't available."
-            rows={3}
-          />
+          {manualEntryToggleOrField("Type what the client said, since live transcript isn't available.")}
         </div>
       ) : (
         <div className="ink-panel mt-2 space-y-1.5 p-2.5 text-sm">
@@ -382,21 +402,14 @@ function LiveTranscriptPanel({
 
       {audioRecordedNoSegments && (
         <div className="mt-2 space-y-2">
-          <WarningCard>Audio recorded, but no live transcript was captured. Add a manual transcript or send to QC review.</WarningCard>
-          <TextAreaField
-            label="Manual transcript entry"
-            value={manualTranscriptNote}
-            onChange={(event) => onManualTranscriptNoteChange(event.target.value)}
-            placeholder="Type what the client said, since live transcript wasn't captured for this recording."
-            rows={3}
-          />
+          <WarningCard>No live transcript captured. Add a manual transcript or send to QC.</WarningCard>
+          {manualEntryToggleOrField("Type what the client said, since live transcript wasn't captured.")}
         </div>
       )}
 
       <p className="mt-1.5 text-[11px] opacity-60">
-        Draft only — review required. The recording (and any manual notes) remains the official record.
-        {unclearSegments.length > 0 &&
-          ` ${unclearSegments.length} section${unclearSegments.length === 1 ? "" : "s"} flagged unclear — will need QC review.`}
+        Draft only — review required.
+        {unclearSegments.length > 0 && ` ${unclearSegments.length} unclear — needs QC.`}
       </p>
     </div>
   );
@@ -464,9 +477,11 @@ function TranscriptDiagnosticsPanel({
     .join(" ");
 
   return (
-    <div className="field-card mt-3 space-y-2 p-3">
-      <p className="text-sm font-bold">Speech recognition diagnostics</p>
-      <Disclosure label="Transcript diagnostics">
+    <div className="mt-3">
+      <Disclosure label="Diagnostics">
+        <div className="field-card mt-2 space-y-2 p-3">
+          <p className="text-sm font-bold">Speech recognition diagnostics</p>
+          <Disclosure label="Transcript diagnostics">
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80">
           <dt className="opacity-60">Secure context</dt>
           <dd>{secureContext ? "yes" : "no"}</dd>
@@ -533,6 +548,8 @@ function TranscriptDiagnosticsPanel({
             {sttTestInterim && <p className="italic opacity-60">…{sttTestInterim}</p>}
           </div>
           {sttTestError && <p className="text-[11px] text-red-300">Last test error: {sttTestError}</p>}
+        </div>
+          </Disclosure>
         </div>
       </Disclosure>
     </div>
@@ -868,17 +885,19 @@ export function RecordingScreen({
 
   return (
     <section>
-      <ScreenHeader title="Record conversation" subtitle={clientId} onBack={onBack} isOnline={isOnline} />
-
-      <div className="mb-2">
-        <ProgressDots total={totalSteps} current={stepIndex} />
-      </div>
+      <ScreenHeader title="Record conversation" subtitle={clientId} onBack={onBack} isOnline={isOnline} dense />
 
       <div
         {...swipeHandlers}
         style={{ touchAction: "pan-y", transform: `translateX(${dragX}px)`, transition: dragging ? "none" : "transform 200ms ease" }}
       >
         <CompactPromptCard
+          // Remounts on every prompt change, so CompactPromptCard's local
+          // "Why this matters" open/closed state always starts fresh —
+          // otherwise it stays open from a previous prompt (React reuses the
+          // same mounted instance across prop changes) and inflates the next
+          // card's height, breaking the compact recording layout.
+          key={step.id}
           step={step}
           stepIndex={stepIndex}
           totalSteps={totalSteps}
@@ -889,48 +908,31 @@ export function RecordingScreen({
           voiceInfoMessage={voiceInfoMessage}
           speechAvailable={speechAvailable}
           onPlayToggle={handlePlayToggle}
-          onReplay={playStepAloud}
         />
       </div>
 
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <button
-          type="button"
-          className="chip-button"
-          onClick={attemptPrevious}
-          disabled={isFirstStep}
-          aria-label="Previous prompt"
-        >
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <button type="button" className="chip-button px-2.5" onClick={attemptPrevious} disabled={isFirstStep} aria-label="Previous prompt">
           <ChevronLeft className="h-3.5 w-3.5" />
-          Previous
         </button>
-        <p className="min-w-0 flex-1 truncate text-center text-[11px] opacity-50">
-          {edgeMessage ?? "Swipe left for next prompt · right for previous"}
-        </p>
-        <button type="button" className="chip-button" onClick={attemptNext} disabled={isLastStep} aria-label="Next prompt">
-          Next
+        <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
+          <ProgressDots total={totalSteps} current={stepIndex} />
+          <p className="truncate text-[10px] opacity-50">{edgeMessage ?? "Swipe left / right"}</p>
+        </div>
+        <button type="button" className="chip-button px-2.5" onClick={attemptNext} disabled={isLastStep} aria-label="Next prompt">
           <ChevronRight className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      {nudgeVisible && (
-        <div className="mt-3">
-          <WarningCard>Start recording before asking the question, so the conversation can be checked later.</WarningCard>
-        </div>
-      )}
       {micError && (
-        <div className="mt-3">
-          <WarningCard>Microphone unavailable. An unresolved segment was saved with a timestamp — add a manual note to continue.</WarningCard>
+        <div className="mt-2">
+          <WarningCard>Microphone unavailable. Add a manual note to continue.</WarningCard>
         </div>
       )}
 
-      <div className="field-card mt-3 p-3">
+      <div className="field-card mt-2 p-3">
         <div className="flex items-center justify-between">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <StatusBadge label={recordingLabel} tone={recordingTone} />
-            <StatusBadge label={isOnline ? "Online" : "Offline"} tone={isOnline ? "good" : "warn"} />
-            {(recordingEverStarted || overrideReason.trim()) && <StatusBadge label="Saved locally" tone="good" />}
-          </div>
+          <StatusBadge label={recordingLabel} tone={recordingTone} />
           <span className="text-2xl font-black tabular-nums">{formatElapsed(elapsedSeconds)}</span>
         </div>
 
@@ -957,9 +959,18 @@ export function RecordingScreen({
           )}
         </div>
 
-        {!isOnline && <p className="mt-2 text-[11px] opacity-60">Processing can happen after sync — this test still completes fully offline.</p>}
-        {recordingStatus === "recorded" && !recording && !micError && (
-          <p className="mt-2 text-[11px] opacity-60">Audio playback is available on the review screen after Finish &amp; review.</p>
+        {/* One compact note max — never stack the nudge, offline, and playback hints together. */}
+        {nudgeVisible ? (
+          <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-[var(--warn)]">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            Start recording before asking the question.
+          </p>
+        ) : !isOnline ? (
+          <p className="mt-2 text-[11px] opacity-60">Works fully offline — processes after sync.</p>
+        ) : (
+          recordingStatus === "recorded" &&
+          !recording &&
+          !micError && <p className="mt-2 text-[11px] opacity-60">Playback available after Finish &amp; review.</p>
         )}
       </div>
 
@@ -972,7 +983,6 @@ export function RecordingScreen({
           recording={recording}
           paused={paused}
           recordingStatus={recordingStatus}
-          languageName={languageName}
           engineStatus={transcriptEngineStatus}
           unclearSegments={unclearSegments}
           manualTranscriptNote={manualFields.additional_notes}

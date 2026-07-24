@@ -38,6 +38,7 @@ import {
 import type { InsightTargetPage } from "@/lib/insights";
 import { analyseTranscriptQuality, applySuggestedCorrection, deriveExtractionSafetyStatus, HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
 import { analyseTranslationSafety } from "@/lib/translationSafety";
+import { DEMO_HELPERS_ENABLED, DEMO_SAMPLE_TRANSCRIPT } from "@/lib/demoHelpers";
 import {
   clearRecords,
   demoTester,
@@ -231,6 +232,8 @@ export default function Home() {
   const [transcriptReviewTouched, setTranscriptReviewTouched] = useState(false);
   /** True once the tester has moved on to Captured Fields while the transcript still needed QC — drives the "Sent to QC" review-status label if they navigate back. */
   const [transcriptSentToQc, setTranscriptSentToQc] = useState(false);
+  /** True once the dev/demo-only "Insert sample transcript for demo" helper has been used on this in-progress record — never set by real recording/STT, always forces QC (see lib/demoHelpers.ts). */
+  const [demoHelperUsed, setDemoHelperUsed] = useState(false);
   const [extracted, setExtracted] = useState<ExtractedFields | null>(null);
   const [editedFields, setEditedFields] = useState<ExtractedFields | null>(null);
   const [extractionSource, setExtractionSource] = useState<ExtractionSource>("raw_transcript");
@@ -240,6 +243,8 @@ export default function Home() {
   const [fieldsReviewedConfirmed, setFieldsReviewedConfirmed] = useState(false);
   /** Short result summary shown after "Auto-fill from transcript" runs, e.g. "4 fields suggested, 2 still need review." */
   const [autoFillSummary, setAutoFillSummary] = useState<string | null>(null);
+  /** Non-destructive suggestions for fields the tester has already hand-edited — "Auto-fill from transcript" (spec §6) never overwrites an edited field, but surfaces a differing transcript-derived value here so the tester can opt in via "Use suggestion" instead of it being silently discarded. */
+  const [fieldSuggestions, setFieldSuggestions] = useState<Partial<Record<keyof ManualExtractedFields, string>>>({});
 
   const [latestRecord, setLatestRecord] = useState<TestRecord | null>(null);
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>("browser");
@@ -415,8 +420,9 @@ export default function Home() {
   const transcriptCapturedPreview = transcriptSegments.some((segment) => segment.isFinal && segment.text.trim());
   const manualFallbackUsedPreview = recordingStatus !== "recorded" ? Boolean(overrideReason.trim()) : !transcriptCapturedPreview && Boolean(overrideReason.trim());
   // The swipe card never reorders or skips the fixed clinical sequence — this
-  // only tracks which of those steps were actually shown while a capture
-  // session was active, so an incomplete pass through the cards still gets
+  // tracks which of those steps the tester actually viewed at all (a marker
+  // now always exists once a card is shown, regardless of recording state —
+  // see goToPromptIndex), so an incomplete pass through the cards still gets
   // flagged for QC instead of silently passing.
   const visitedStepIds = useMemo(() => new Set(promptMarkers.map((marker) => marker.stepId)), [promptMarkers]);
   const missingPromptSteps = useMemo(
@@ -424,6 +430,19 @@ export default function Home() {
     [activePack, visitedStepIds]
   );
   const hasUnvisitedPromptsPreview = missingPromptSteps.length > 0;
+  // Separate, honest signal: steps the tester DID view, but never while
+  // continuous audio recording was active (e.g. the mic failed before they
+  // swiped through, or recording was paused) — must never be reported to QC
+  // as "never shown", only as "not captured in audio".
+  const recordedStepIds = useMemo(
+    () => new Set(promptMarkers.filter((marker) => marker.capturedDuringRecording).map((marker) => marker.stepId)),
+    [promptMarkers]
+  );
+  const unrecordedViewedSteps = useMemo(
+    () => activePack.prompts_json.filter((step) => visitedStepIds.has(step.id) && !recordedStepIds.has(step.id)),
+    [activePack, visitedStepIds, recordedStepIds]
+  );
+  const hasUnrecordedViewedPromptsPreview = unrecordedViewedSteps.length > 0;
 
   // Transcript quality / translation safety — recomputed live as the tester
   // edits, since these are draft-review signals, never a one-time judgement.
@@ -464,6 +483,7 @@ export default function Home() {
     manualFallbackUsed: manualFallbackUsedPreview,
     hasUnclearSegments: unclearSegments.length > 0,
     hasUnvisitedPrompts: hasUnvisitedPromptsPreview,
+    hasUnrecordedViewedPrompts: hasUnrecordedViewedPromptsPreview,
     transcriptQualityRisk: transcriptQualityReport.overallRisk,
     hasClinicalCorrection: hasClinicalCorrectionPreview,
     translationReviewRequired: translationSafetyReport.requiresQc,
@@ -496,11 +516,13 @@ export default function Home() {
         manualFallbackUsed: manualFallbackUsedPreview,
         hasUnclearSegments: unclearSegments.length > 0,
         hasUnvisitedPrompts: hasUnvisitedPromptsPreview,
+        hasUnrecordedViewedPrompts: hasUnrecordedViewedPromptsPreview,
         transcriptQualityRisk: transcriptQualityReport.overallRisk,
         hasClinicalCorrection: hasClinicalCorrectionPreview,
         translationReviewRequired: translationSafetyReport.requiresQc,
         extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required",
-        fieldsRequireReviewUnconfirmed: fieldsRequireReviewUnconfirmedPreview
+        fieldsRequireReviewUnconfirmed: fieldsRequireReviewUnconfirmedPreview,
+        demoHelperUsed
       })
     : false;
   const fieldsProcessingStatus: ProcessingStatus = computeProcessingStatus({
@@ -574,14 +596,33 @@ export default function Home() {
     setIgnoredFlagIds([]);
     setTranscriptReviewTouched(false);
     setTranscriptSentToQc(false);
+    setDemoHelperUsed(false);
     setExtracted(null);
     setEditedFields(null);
     setExtractionSource("raw_transcript");
     setFieldEditedByUser({});
     setFieldsReviewedConfirmed(false);
     setAutoFillSummary(null);
+    setFieldSuggestions({});
     setLatestRecord(null);
     setSyncMessage("");
+  }
+
+  /**
+   * "Reset demo data" (More → Admin tools) — for rehearsing/re-recording a
+   * demo consistently. Clears saved local records and their audio, plus any
+   * in-progress client/recording/transcript/QC state via resetTest(), and
+   * returns to Home. Does not touch tester login, language pack downloads, or
+   * display settings — those are app configuration, not demo data.
+   */
+  function resetDemoData() {
+    clearRecords();
+    clearAllAudioBlobs().catch(() => {
+      // IndexedDB may be unavailable (e.g. private mode) — the local record list is already cleared, which is the primary reset signal.
+    });
+    setRecords([]);
+    resetTest();
+    setScreen("dashboard");
   }
 
   function beginDemoLogin() {
@@ -654,7 +695,19 @@ export default function Home() {
     }
   }
 
-  function addPromptMarker(step: PromptStep, stepIndexValue: number, navigationAction: PromptMarker["navigationAction"]) {
+  /**
+   * Always records that the tester VIEWED this prompt (spec: "prompt viewed
+   * markers"), regardless of recording state — `capturedDuringRecording` is
+   * a separate flag on the same marker for whether continuous audio
+   * recording was active at that moment, so a mic failure never makes an
+   * honestly-viewed prompt look like it was "never shown" to QC.
+   */
+  function addPromptMarker(
+    step: PromptStep,
+    stepIndexValue: number,
+    navigationAction: PromptMarker["navigationAction"],
+    capturedDuringRecording: boolean
+  ) {
     setPromptMarkers((prev) => [
       ...prev,
       {
@@ -665,6 +718,7 @@ export default function Home() {
         promptText: step.client_prompt,
         language: activePack.code,
         navigationAction,
+        capturedDuringRecording,
         createdAt: new Date().toISOString()
       }
     ]);
@@ -846,7 +900,7 @@ export default function Home() {
       setMicError(false);
       setRecordingStartedAt((prev) => prev || new Date().toISOString());
       startElapsedTimer();
-      addPromptMarker(currentStep, currentStepIndex, "start");
+      addPromptMarker(currentStep, currentStepIndex, "start", true);
     } catch {
       // getUserMedia was denied/unavailable — MediaRecorder can't run, and
       // in practice neither can SpeechRecognition (browsers gate both under
@@ -862,7 +916,9 @@ export default function Home() {
       setMicError(true);
       setRecording(false);
       setShowOverrideInput(true);
-      addPromptMarker(currentStep, currentStepIndex, "start");
+      // Mic access failed — the tester was still shown this prompt (it's
+      // "start", the very first card), but no audio was ever captured for it.
+      addPromptMarker(currentStep, currentStepIndex, "start", false);
     }
   }
 
@@ -937,7 +993,7 @@ export default function Home() {
     const recordingHappened = Boolean(recordingStartedAt) && !micError;
 
     if (recording || paused) {
-      addPromptMarker(currentStep, currentStepIndex, "finish");
+      addPromptMarker(currentStep, currentStepIndex, "finish", true);
       mediaRecorderRef.current?.stop();
       setRecording(false);
       setPaused(false);
@@ -971,6 +1027,7 @@ export default function Home() {
     setIgnoredFlagIds([]);
     setTranscriptReviewTouched(false);
     setTranscriptSentToQc(false);
+    setDemoHelperUsed(false);
     setExtracted(null);
     setEditedFields(null);
     setFieldEditedByUser({});
@@ -992,12 +1049,28 @@ export default function Home() {
     setRawTranscript(transcript);
     setEnglishProcessingTranscript(english);
     setCorrectedTranscript(english);
+    setDemoHelperUsed(false);
   }
 
   /** Corrected-transcript textarea edits — tracked so the review-status badge can distinguish "not reviewed" from "reviewed, no changes". */
   function updateCorrectedTranscript(value: string) {
     setCorrectedTranscript(value);
     setTranscriptReviewTouched(true);
+  }
+
+  /**
+   * Dev/demo-only "Insert sample transcript for demo" helper (lib/demoHelpers.ts,
+   * gated by DEMO_HELPERS_ENABLED). Writes the same fixed sample sentence into
+   * correctedTranscript exactly as if the tester had pasted it by hand — it
+   * never touches rawTranscript/englishProcessingTranscript, so the raw audio
+   * transcript is never overwritten or impersonated. Always marks
+   * demoHelperUsed so QC/export can see this record's transcript did not come
+   * from a real recording.
+   */
+  function insertDemoTranscript() {
+    updateCorrectedTranscript(DEMO_SAMPLE_TRANSCRIPT);
+    setDemoHelperUsed(true);
+    setFieldsReviewedConfirmed(false);
   }
 
   /**
@@ -1039,17 +1112,20 @@ export default function Home() {
 
   /**
    * Swipe-card navigation — moves the visible prompt only. Recording,
-   * transcript segments, and the timer are untouched; the only side effect
-   * is a timestamped marker (when a capture session is active) and updating
-   * currentStepIdRef synchronously so the very next transcript segment is
-   * attributed to the step the tester is now looking at, not the one they
-   * left. Bounds are re-checked here too (not just in the UI) so this stays
-   * safe to call directly.
+   * transcript segments, and the timer are untouched. A "viewed" prompt
+   * marker is always recorded here, even if the microphone failed or
+   * recording isn't active — the tester genuinely looked at this card, and
+   * QC must never read that as "prompt never shown" just because audio
+   * capture wasn't running (see addPromptMarker/capturedDuringRecording).
+   * Also updates currentStepIdRef synchronously so the very next transcript
+   * segment is attributed to the step the tester is now looking at, not the
+   * one they left. Bounds are re-checked here too (not just in the UI) so
+   * this stays safe to call directly.
    */
   function goToPromptIndex(targetIndex: number, navigationAction: "next" | "previous") {
     if (targetIndex < 0 || targetIndex >= activePack.prompts_json.length) return;
     const targetStep = activePack.prompts_json[targetIndex];
-    if (recording || paused) addPromptMarker(targetStep, targetIndex, navigationAction);
+    addPromptMarker(targetStep, targetIndex, navigationAction, recording || paused);
     currentStepIdRef.current = targetStep.id;
     setCurrentStepIndex(targetIndex);
   }
@@ -1121,6 +1197,7 @@ export default function Home() {
     setFieldEditedByUser({});
     setFieldsReviewedConfirmed(false);
     setAutoFillSummary(null);
+    setFieldSuggestions({});
   }
 
   function goToCapturedFields() {
@@ -1147,6 +1224,20 @@ export default function Home() {
       if (reconciledMap[key].value) suggestedCount += 1;
       if (reconciledMap[key].requiresReview) reviewCount += 1;
     });
+
+    // Spec §6: a hand-edited field is never overwritten, but if the latest
+    // transcript now suggests a different value, surface it as a
+    // non-destructive "Transcript suggests: X" note the tester can opt into
+    // via "Use suggestion" — rather than the differing draft being silently
+    // discarded with no trace.
+    const currentEffective = editedFields ?? extracted;
+    const nextSuggestions: Partial<Record<keyof ManualExtractedFields, string>> = {};
+    MANUAL_FIELD_KEYS.forEach((key) => {
+      if (!fieldEditedByUser[key]) return;
+      const suggested = reconciledMap[key].value;
+      if (suggested && suggested !== currentEffective[key]) nextSuggestions[key] = suggested;
+    });
+    setFieldSuggestions(nextSuggestions);
 
     function applyAutoFill(base: ExtractedFields): ExtractedFields {
       const next: ExtractedFields = { ...base };
@@ -1238,6 +1329,15 @@ export default function Home() {
   function editExtractedField(key: keyof ManualExtractedFields, value: string) {
     setFieldEditedByUser((prev) => ({ ...prev, [key]: true }));
     setFieldsReviewedConfirmed(false);
+    // Any pending "Transcript suggests" note for this field is stale the
+    // moment the tester types their own value — the next Auto-fill run will
+    // recompute it fresh against whatever they've now entered.
+    setFieldSuggestions((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
     setEditedFields((prev) => {
       const base = prev ?? extracted;
       if (!base) return prev;
@@ -1246,6 +1346,13 @@ export default function Home() {
       next.field_confidence = { ...(base.field_confidence ?? {}), [key]: manualConfidence };
       return next;
     });
+  }
+
+  /** "Use suggestion" (spec §6) — applies a surfaced transcript-derived value for an already-edited field. Goes through editExtractedField so it's treated exactly like any other tester edit (source: manual, protected from future auto-fill), rather than a special-cased path. */
+  function useFieldSuggestion(key: keyof ManualExtractedFields) {
+    const suggestion = fieldSuggestions[key];
+    if (!suggestion) return;
+    editExtractedField(key, suggestion);
   }
 
   async function saveCurrentRecord() {
@@ -1264,11 +1371,13 @@ export default function Home() {
       manualFallbackUsed: manualFallbackUsedPreview,
       hasUnclearSegments: unclearSegments.length > 0,
       hasUnvisitedPrompts: hasUnvisitedPromptsPreview,
+      hasUnrecordedViewedPrompts: hasUnrecordedViewedPromptsPreview,
       transcriptQualityRisk: transcriptQualityReport.overallRisk,
       hasClinicalCorrection: hasClinicalCorrectionPreview,
       translationReviewRequired: translationSafetyReport.requiresQc,
       extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required",
-      fieldsRequireReviewUnconfirmed: fieldsRequireReviewUnconfirmedPreview
+      fieldsRequireReviewUnconfirmed: fieldsRequireReviewUnconfirmedPreview,
+      demoHelperUsed
     });
 
     let audioLocalUrl: string;
@@ -1310,6 +1419,7 @@ export default function Home() {
       transcript_segments: transcriptSegments,
       prompt_markers: promptMarkers,
       has_unvisited_prompts: hasUnvisitedPromptsPreview,
+      has_unrecorded_viewed_prompts: hasUnrecordedViewedPromptsPreview,
       unclear_segments: unclearSegments,
       corrected_transcript_text: correctedTranscript,
       extracted_json: extracted,
@@ -1337,6 +1447,7 @@ export default function Home() {
       translation_review_required: translationSafetyReport.requiresQc,
       extraction_safety_status: extractionSafetyStatusPreview,
       fields_reviewed_by_tester: fieldsReviewedConfirmed,
+      demo_helper_used: demoHelperUsed,
       client_snapshot: client,
       created_at: now,
       updated_at: now
@@ -1523,7 +1634,6 @@ export default function Home() {
           tester={tester}
           activePack={activePack}
           isOnline={isOnline}
-          displaySettings={displaySettings}
           nextAction={nextAction}
           recordsNeedingQc={recordsNeedingQc}
           recordsPendingSync={recordsPendingSync}
@@ -1544,6 +1654,7 @@ export default function Home() {
           onInsights={() => setScreen("insights")}
           onExport={() => setScreen("export")}
           onAdmin={() => setScreen("admin")}
+          onResetDemoData={resetDemoData}
           onBack={() => setScreen("dashboard")}
         />
       )}
@@ -1660,6 +1771,7 @@ export default function Home() {
           unclearSegments={unclearSegments}
           promptMarkers={promptMarkers}
           missingPromptLabels={missingPromptSteps.map((step) => step.client_prompt)}
+          unrecordedPromptLabels={unrecordedViewedSteps.map((step) => step.client_prompt)}
           isOnline={isOnline}
           canGenerateDraft={!transcriptCapturedPreview && Boolean(recordingStartedAt) && !micError}
           onGenerateDraft={regenerateTranscriptDraft}
@@ -1673,6 +1785,9 @@ export default function Home() {
           onApplyCorrection={applyCorrection}
           onIgnoreFlag={ignoreFlag}
           onMarkFlagUnclear={markFlagUnclear}
+          demoHelpersEnabled={DEMO_HELPERS_ENABLED}
+          demoHelperUsed={demoHelperUsed}
+          onInsertDemoTranscript={insertDemoTranscript}
         />
       )}
 
@@ -1691,6 +1806,9 @@ export default function Home() {
           autoFillSummary={autoFillSummary}
           fieldsReviewedConfirmed={fieldsReviewedConfirmed}
           onToggleFieldsReviewed={() => setFieldsReviewedConfirmed((value) => !value)}
+          fieldSuggestions={fieldSuggestions}
+          onUseSuggestion={useFieldSuggestion}
+          demoHelperUsed={demoHelperUsed}
         />
       )}
 
@@ -1735,8 +1853,6 @@ export default function Home() {
             setRecords([]);
           }}
           onReviewQc={() => setScreen("qc")}
-          onInsights={() => setScreen("insights")}
-          onInsightNavigate={navigateToInsightTarget}
           onBack={() => setScreen("dashboard")}
         />
       )}

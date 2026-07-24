@@ -65,6 +65,7 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     transcript_segments: record.transcript_segments ?? [],
     prompt_markers: record.prompt_markers ?? [],
     has_unvisited_prompts: record.has_unvisited_prompts ?? false,
+    has_unrecorded_viewed_prompts: record.has_unrecorded_viewed_prompts ?? false,
     unclear_segments: record.unclear_segments ?? [],
     corrected_transcript_text: record.corrected_transcript_text ?? "",
     extracted_json: { ...createEmptyExtractedFields(), ...record.extracted_json },
@@ -86,6 +87,7 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     translation_review_required: record.translation_review_required ?? (record.language ? record.language !== "en" : false),
     extraction_safety_status: record.extraction_safety_status ?? "safe",
     fields_reviewed_by_tester: record.fields_reviewed_by_tester ?? false,
+    demo_helper_used: record.demo_helper_used ?? false,
     client_snapshot: {
       id: record.client_snapshot?.id ?? "",
       age_band: record.client_snapshot?.age_band ?? "",

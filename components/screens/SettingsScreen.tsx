@@ -110,9 +110,7 @@ export function SettingsScreen({
         <PromptCard eyebrow="Ask the client — say this aloud" prompt="Cover your left eye and read the smallest line you can see." onPlay={() => {}} speechAvailable={isSpeechSupported()} />
       </div>
 
-      <PrimaryButton fullWidth onClick={onBack}>
-        Save settings
-      </PrimaryButton>
+      <p className="text-xs opacity-50">Changes apply immediately and are saved on this device.</p>
 
       <div className="mt-8 space-y-4">
         <div className="flex items-center justify-between">
@@ -173,7 +171,11 @@ export function SettingsScreen({
         <p className="mt-1 text-xs opacity-50">Used to demonstrate offline-first behaviour without disconnecting your device.</p>
       </div>
 
-      <DangerButton fullWidth className="mt-8" icon={<LogOut className="h-5 w-5" />} onClick={onLogout}>
+      <PrimaryButton fullWidth className="mt-8" onClick={onBack}>
+        Done
+      </PrimaryButton>
+
+      <DangerButton fullWidth className="mt-4" icon={<LogOut className="h-5 w-5" />} onClick={onLogout}>
         Log out
       </DangerButton>
       <p className="mt-2 text-center text-xs opacity-50">
