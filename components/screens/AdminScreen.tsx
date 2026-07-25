@@ -31,6 +31,15 @@ export function AdminScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCode, selectedStepId]);
 
+  // Any further edit to the draft (typing in one of the fields below) makes
+  // the "Saved locally" badge stale — it must clear the moment the on-screen
+  // draft no longer matches what was actually persisted, not just when
+  // switching language/step. saveDraft() itself never changes `draft`, so
+  // this effect only fires from real edits, not from the save action.
+  useEffect(() => {
+    setSaved(false);
+  }, [draft]);
+
   function saveDraft() {
     if (!draft || !pack) return;
     setPacks(

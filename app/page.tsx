@@ -24,7 +24,14 @@ import { computeProcessingStatus, evaluateNeedsQc, recordNeedsQc } from "@/lib/q
 import { getNextAction, type WorkflowState } from "@/lib/workflow";
 import { clearAllAudioBlobs, getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
 import { loadAuthMode, saveAuthMode, type AuthMode } from "@/lib/auth";
-import { applyDisplaySettings, loadDisplaySettings, saveDisplaySettings, type DisplaySettings } from "@/lib/settings";
+import {
+  applyDisplaySettings,
+  loadDisplaySettings,
+  loadShowSttDiagnostics,
+  saveDisplaySettings,
+  saveShowSttDiagnostics,
+  type DisplaySettings
+} from "@/lib/settings";
 import {
   createBrowserRecognitionController,
   getSpeechRecognitionConstructor,
@@ -69,6 +76,7 @@ import {
   type PromptStep,
   type RecordingStatus,
   type SuggestedCorrection,
+  type SyncStatus,
   type Tester,
   type TestRecord,
   type TranscriptQualityFlag,
@@ -252,6 +260,8 @@ export default function Home() {
   const [syncMessage, setSyncMessage] = useState("");
   const [qcAudioUrl, setQcAudioUrl] = useState("");
   const [displaySettings, setDisplaySettings] = useState<DisplaySettings>(loadDisplaySettings());
+  /** More → Admin tools → "Show STT diagnostics" — off by default; loaded from localStorage on mount below. */
+  const [showSttDiagnostics, setShowSttDiagnostics] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -279,6 +289,7 @@ export default function Home() {
     const settings = loadDisplaySettings();
     setDisplaySettings(settings);
     applyDisplaySettings(settings);
+    setShowSttDiagnostics(loadShowSttDiagnostics());
 
     let micPermissionStatusRef: PermissionStatus | null = null;
     const handleMicPermissionChange = () => {
@@ -560,6 +571,11 @@ export default function Home() {
     saveLanguagePacks(next);
   }
 
+  function updateShowSttDiagnostics(value: boolean) {
+    setShowSttDiagnostics(value);
+    saveShowSttDiagnostics(value);
+  }
+
   function resetTest() {
     setClient(blankClient());
     setHasDraftClient(false);
@@ -665,6 +681,11 @@ export default function Home() {
     if (supabase && authMode === "supabase") await supabase.auth.signOut();
     saveAuthMode(null);
     setAuthMode(null);
+    // Logging out only signs out locally (saved records/tester profile are
+    // untouched) — but any in-progress client/recording/transcript draft must
+    // not silently resume on the next login, or "Continue as demo tester"
+    // can drop the tester back into a stale mid-test screen instead of Home.
+    resetTest();
     setScreen("login");
   }
 
@@ -1396,7 +1417,12 @@ export default function Home() {
       audioLocalUrl = `override://no-recording/${id}?at=${encodeURIComponent(now)}`;
     }
 
-    const initialSyncStatus = isOnline ? (isSupabaseConfigured ? "Pending sync" : "Synced") : "Pending sync";
+    // Never "Synced" here — that label is reserved for a record that has
+    // actually round-tripped to Supabase (see the isSupabaseConfigured &&
+    // isOnline branch below, which is the only place that sets it). Without
+    // Supabase configured, the record is permanently local by design, not
+    // "pending" something that will never happen.
+    const initialSyncStatus: SyncStatus = isSupabaseConfigured ? "Pending sync" : "Local only";
     const record: TestRecord = {
       id,
       session_id: id,
@@ -1432,11 +1458,14 @@ export default function Home() {
       qc_status: needsQc ? "Unreviewed" : "Approved",
       needs_qc: needsQc,
       qc_notes: "",
+      // Never "Synced" yet at this point — the real Supabase round-trip (if
+      // any) only happens in the block below, which saves its own updated
+      // processing_status once it knows the outcome.
       processing_status: computeProcessingStatus({
         transcriptCaptured,
         needsQc,
         qcApproved: !needsQc,
-        synced: initialSyncStatus === "Synced"
+        synced: false
       }),
       sync_attempts: 0,
       transcript_quality_risk: transcriptQualityReport.overallRisk,
@@ -1479,10 +1508,15 @@ export default function Home() {
       setSyncMessage(
         syncResult.ok ? "Synced to Supabase." : `Saved locally; Supabase sync failed (${syncResult.reason}).`
       );
-    } else if (isOnline) {
-      setSyncMessage("Saved in local demo mode. Add Supabase env vars for cloud sync.");
-    } else {
+    } else if (isSupabaseConfigured) {
+      // Supabase is configured but the device is offline right now — a real
+      // sync is still expected once connection returns (see syncPendingRecords).
       setSyncMessage("Saved locally. This record will remain pending until connection returns.");
+    } else {
+      // No Supabase env vars at all — this record will never leave the
+      // device, online or not, so it must never be described as "pending"
+      // a sync that isn't configured to happen.
+      setSyncMessage("Saved locally. Cloud sync is not configured for this demo — records stay on this device.");
     }
 
     setRecords(loadRecords());
@@ -1647,6 +1681,8 @@ export default function Home() {
         <MoreScreen
           isOnline={isOnline}
           recordsNeedingQc={recordsNeedingQc}
+          showSttDiagnostics={showSttDiagnostics}
+          onToggleSttDiagnostics={updateShowSttDiagnostics}
           onLanguage={() => setScreen("language")}
           onDisplaySettings={() => setScreen("settings")}
           onReplayTraining={() => setScreen("training")}
@@ -1742,6 +1778,7 @@ export default function Home() {
           onStartSttOnlyTest={startSttOnlyTest}
           onStopSttOnlyTest={stopSttOnlyTest}
           onClearSttOnlyTest={clearSttOnlyTest}
+          adminDiagnosticsEnabled={showSttDiagnostics}
           unclearSegments={unclearSegments}
           onMarkUnclear={markSectionUnclear}
           startRecording={startRecording}

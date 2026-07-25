@@ -68,6 +68,17 @@ create table if not exists public.test_records (
   qc_notes text not null default '',
   processing_status text not null default 'not_processed' check (processing_status in ('not_processed', 'ready_for_review', 'needs_qc', 'processed_after_sync')),
   sync_attempts integer not null default 0,
+  has_unvisited_prompts boolean not null default false,
+  has_unrecorded_viewed_prompts boolean not null default false,
+  transcript_quality_risk text not null default 'low' check (transcript_quality_risk in ('low', 'medium', 'high')),
+  transcript_quality_flags jsonb not null default '[]'::jsonb,
+  suggested_corrections jsonb not null default '[]'::jsonb,
+  corrections_applied jsonb not null default '[]'::jsonb,
+  unresolved_transcript_flag_ids text[] not null default '{}',
+  translation_review_required boolean not null default false,
+  extraction_safety_status text not null default 'safe' check (extraction_safety_status in ('safe', 'draft_review_required')),
+  fields_reviewed_by_tester boolean not null default false,
+  demo_helper_used boolean not null default false,
   client_snapshot jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -100,6 +111,17 @@ alter table public.test_records add column if not exists session_id text not nul
 alter table public.test_records add column if not exists deployment_site text not null default '';
 alter table public.testers add column if not exists setup_completed boolean not null default false;
 alter table public.testers add column if not exists last_active_at timestamptz;
+alter table public.test_records add column if not exists has_unvisited_prompts boolean not null default false;
+alter table public.test_records add column if not exists has_unrecorded_viewed_prompts boolean not null default false;
+alter table public.test_records add column if not exists transcript_quality_risk text not null default 'low';
+alter table public.test_records add column if not exists transcript_quality_flags jsonb not null default '[]'::jsonb;
+alter table public.test_records add column if not exists suggested_corrections jsonb not null default '[]'::jsonb;
+alter table public.test_records add column if not exists corrections_applied jsonb not null default '[]'::jsonb;
+alter table public.test_records add column if not exists unresolved_transcript_flag_ids text[] not null default '{}';
+alter table public.test_records add column if not exists translation_review_required boolean not null default false;
+alter table public.test_records add column if not exists extraction_safety_status text not null default 'safe';
+alter table public.test_records add column if not exists fields_reviewed_by_tester boolean not null default false;
+alter table public.test_records add column if not exists demo_helper_used boolean not null default false;
 
 -- Basic RLS for a classroom PoC. Keep restrictive by default; loosen only for demo environments.
 alter table public.testers enable row level security;

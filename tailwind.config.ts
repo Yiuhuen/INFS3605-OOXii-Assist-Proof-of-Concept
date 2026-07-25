@@ -5,16 +5,21 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Reference the same CSS custom properties globals.css overrides per
+        // data-contrast theme (standard/high-contrast/warm) — these previously
+        // duplicated the standard theme's hex values directly, which meant
+        // switching to "High contrast" or "Warm low-glare" in Display settings
+        // had no visible effect anywhere these field-* classes were used.
         field: {
-          ink: "#150c1f",
-          surface: "#1c1226",
-          card: "#201530",
-          muted: "#a898bb",
-          line: "#352842",
-          accent: "#ecc568",
-          good: "#7fe3a0",
-          warn: "#f0b76d",
-          danger: "#f2937f"
+          ink: "var(--bg-ink)",
+          surface: "var(--bg-surface)",
+          card: "var(--bg-card)",
+          muted: "var(--muted)",
+          line: "var(--line)",
+          accent: "var(--gold)",
+          good: "var(--good)",
+          warn: "var(--warn)",
+          danger: "var(--danger)"
         }
       },
       boxShadow: {

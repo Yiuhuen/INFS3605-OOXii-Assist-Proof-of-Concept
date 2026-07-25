@@ -25,7 +25,7 @@ import type {
  * app/page.tsx) treats them exactly like a field nobody typed.
  *
  * Pure, synchronous, no network/AI calls — same cost-safe design note as
- * lib/mockAi.ts and lib/transcriptQuality.ts.
+ * lib/liveTranscript.ts and lib/transcriptQuality.ts.
  * ---------------------------------------------------------------------------
  */
 

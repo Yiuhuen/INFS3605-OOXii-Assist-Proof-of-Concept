@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { ArrowRight, MapPin } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
 import { computeInsights, type ActionableInsight, type InsightTargetPage } from "@/lib/insights";
-import { EmptyState, MetricCard, PrimaryButton, SecondaryButton, StatusBadge } from "@/components/ui";
+import { EmptyState, MetricCard, SecondaryButton, StatusBadge } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 function Row({ label, value, tone }: { label: string; value: string; tone?: "warn" | "danger" | "good" | "neutral" }) {
@@ -126,45 +126,5 @@ export function InsightsScreen({
         Back to Home
       </SecondaryButton>
     </section>
-  );
-}
-
-/** Compact top-N insight cards for embedding on Home/Export — highest priority first. */
-export function ActionableInsightsPreview({
-  records,
-  onNavigate,
-  onSeeAll,
-  limit = 2
-}: {
-  records: TestRecord[];
-  onNavigate: (target: InsightTargetPage) => void;
-  onSeeAll: () => void;
-  limit?: number;
-}) {
-  const insights = useMemo(() => computeInsights(records).insights, [records]);
-  if (insights.length === 0) return null;
-  const top = insights.slice(0, limit);
-
-  return (
-    <div className="mb-6">
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-wide opacity-60">Actionable insights</p>
-        {insights.length > top.length && (
-          <button className="text-xs font-bold text-[var(--gold)]" onClick={onSeeAll}>
-            See all ({insights.length})
-          </button>
-        )}
-      </div>
-      <div className="space-y-3">
-        {top.map((insight) => (
-          <InsightCard key={insight.id} insight={insight} onNavigate={onNavigate} />
-        ))}
-      </div>
-      {insights.length <= top.length && (
-        <PrimaryButton fullWidth className="mt-3" onClick={onSeeAll}>
-          View all insights
-        </PrimaryButton>
-      )}
-    </div>
   );
 }

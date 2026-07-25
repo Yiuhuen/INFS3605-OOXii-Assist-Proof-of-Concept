@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { BarChart3, Globe, PenLine, Play, RotateCcw, Settings, ShieldCheck, UploadCloud } from "lucide-react";
-import { DangerButton, ListRow, SecondaryButton, WarningCard } from "@/components/ui";
+import { CheckboxCard, DangerButton, ListRow, SecondaryButton, WarningCard } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 
 /**
@@ -15,6 +15,8 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 export function MoreScreen({
   isOnline,
   recordsNeedingQc,
+  showSttDiagnostics,
+  onToggleSttDiagnostics,
   onLanguage,
   onDisplaySettings,
   onReplayTraining,
@@ -27,6 +29,9 @@ export function MoreScreen({
 }: {
   isOnline: boolean;
   recordsNeedingQc: number;
+  /** More → Admin tools → "Show STT diagnostics" — off by default so a normal demo run never shows the technical recording-screen diagnostics panel. */
+  showSttDiagnostics: boolean;
+  onToggleSttDiagnostics: (value: boolean) => void;
   onLanguage: () => void;
   onDisplaySettings: () => void;
   onReplayTraining: () => void;
@@ -62,6 +67,16 @@ export function MoreScreen({
       <div className="mb-2 space-y-2">
         <ListRow icon={<PenLine className="h-5 w-5" />} label="Prompt editor" onClick={onAdmin} />
         <ListRow icon={<RotateCcw className="h-5 w-5" />} label="Reset demo data" detail="For demo recording — clears local records and current test" onClick={() => setConfirmingReset(true)} />
+        <div className="rounded-2xl border border-field-line bg-field-card p-3">
+          <CheckboxCard
+            checked={showSttDiagnostics}
+            onToggle={() => onToggleSttDiagnostics(!showSttDiagnostics)}
+            label="Show STT diagnostics"
+          />
+          <p className="mt-2 pl-8 text-xs opacity-60">
+            Admin diagnostic tool — reveals a technical speech-recognition panel on the recording screen. Keep off for a normal demo.
+          </p>
+        </div>
       </div>
 
       {confirmingReset && (

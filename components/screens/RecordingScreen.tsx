@@ -32,8 +32,13 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 import { buildClientSpokenPrompt, isSpeechSupported, speakPrompt, stopSpeaking, type SpeechSpeed } from "@/lib/speech";
 import { type TranscriptEngineStatus } from "@/lib/liveTranscript";
 
-/** Dev diagnostics panel: on by default outside production, or opt-in in production via NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG=true. Both sides are inlined at build time by Next.js. */
-const SHOW_TRANSCRIPT_DEBUG = process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG === "true";
+/**
+ * Admin diagnostic tool, off by default — never shown on a normal demo run.
+ * Visible only when NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG=true is set at build
+ * time (e.g. a dedicated QA build), or when the tester has switched on
+ * "Show STT diagnostics" under More → Admin tools (adminDiagnosticsEnabled).
+ */
+const SHOW_TRANSCRIPT_DEBUG_ENV = process.env.NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG === "true";
 
 function stepTitle(stepId: string) {
   if (stepId === "right-distance" || stepId === "left-distance") return "Distance vision";
@@ -416,8 +421,9 @@ function LiveTranscriptPanel({
 }
 
 /**
- * Dev/QA-only diagnostics — always available when SHOW_TRANSCRIPT_DEBUG is
- * on, independent of whether a recording/mic session is active, so the
+ * Admin/QA-only diagnostics — rendered only when the caller's gate
+ * (SHOW_TRANSCRIPT_DEBUG_ENV or the More → Admin tools toggle) is on,
+ * independent of whether a recording/mic session is active, so the
  * standalone "Test speech recognition only" button can be used before (or
  * without) ever starting a real recording.
  */
@@ -478,9 +484,10 @@ function TranscriptDiagnosticsPanel({
 
   return (
     <div className="mt-3">
-      <Disclosure label="Diagnostics">
+      <Disclosure label="Admin diagnostic tool">
         <div className="field-card mt-2 space-y-2 p-3">
           <p className="text-sm font-bold">Speech recognition diagnostics</p>
+          <p className="text-[11px] opacity-60">Admin/QA only — not part of the normal tester flow. Enabled via More → Admin tools.</p>
           <Disclosure label="Transcript diagnostics">
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80">
           <dt className="opacity-60">Secure context</dt>
@@ -679,6 +686,7 @@ export function RecordingScreen({
   onStartSttOnlyTest,
   onStopSttOnlyTest,
   onClearSttOnlyTest,
+  adminDiagnosticsEnabled,
   unclearSegments,
   onMarkUnclear,
   startRecording,
@@ -737,6 +745,8 @@ export function RecordingScreen({
   onStartSttOnlyTest: () => void;
   onStopSttOnlyTest: () => void;
   onClearSttOnlyTest: () => void;
+  /** More → Admin tools → "Show STT diagnostics" toggle — the only in-app way to reveal the diagnostics panel below; off by default so a normal demo never shows it. */
+  adminDiagnosticsEnabled: boolean;
   unclearSegments: UnclearSegment[];
   onMarkUnclear: () => void;
   startRecording: () => void;
@@ -802,7 +812,6 @@ export function RecordingScreen({
     stopSpeaking();
     setIsSpeaking(false);
     setVoiceInfoMessage(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.id]);
 
   useEffect(() => {
@@ -843,7 +852,6 @@ export function RecordingScreen({
       return;
     }
     withNavigationLock(onNextPrompt);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLastStep, onNextPrompt]);
 
   const attemptPrevious = useCallback(() => {
@@ -852,7 +860,6 @@ export function RecordingScreen({
       return;
     }
     withNavigationLock(onPreviousPrompt);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFirstStep, onPreviousPrompt]);
 
   // Manual-fallback panel open → swipe is disabled outright (the tester's
@@ -990,7 +997,7 @@ export function RecordingScreen({
         />
       )}
 
-      {SHOW_TRANSCRIPT_DEBUG && (
+      {(SHOW_TRANSCRIPT_DEBUG_ENV || adminDiagnosticsEnabled) && (
         <TranscriptDiagnosticsPanel
           segments={transcriptSegments}
           interimText={interimText}

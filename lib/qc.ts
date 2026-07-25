@@ -1,14 +1,14 @@
 import { FIELD_DISPLAY_LABELS } from "./fieldExtraction";
 import { HIGH_RISK_EXTRACTED_FIELDS } from "./transcriptQuality";
-import type { ManualExtractedFields, ProcessingStatus, QCStatus, RecordingStatus, TestRecord, TranscriptQualityRisk } from "./types";
+import type { ManualExtractedFields, ProcessingStatus, QCStatus, RecordingStatus, SyncStatus, TestRecord, TranscriptQualityRisk } from "./types";
 
 /**
  * ---------------------------------------------------------------------------
  * Cost-safe future-AI design note
  * ---------------------------------------------------------------------------
  * Nothing in this app calls a paid AI/STT API. All "processing" below is a
- * local, deterministic mock (see lib/mockAi.ts, lib/liveTranscript.ts) so the
- * field workflow works fully offline with zero API cost.
+ * local, deterministic pass (see lib/fieldExtraction.ts, lib/liveTranscript.ts)
+ * so the field workflow works fully offline with zero API cost.
  *
  * If a real AI pass is added later, it should only ever run:
  *   1. after the device is back online and the record has synced,
@@ -160,6 +160,18 @@ export function qcStatusLabel(status: QCStatus): string {
   return qcStatusLabels[status] ?? status;
 }
 
+const syncStatusLabels: Record<SyncStatus, string> = {
+  "Pending sync": "Pending sync",
+  Synced: "Synced",
+  Failed: "Sync failed",
+  "Local only": "Saved locally"
+};
+
+/** Friendlier copy for the raw SyncStatus enum — display-only, the stored value never changes. "Local only" always reads "Saved locally", never "Synced". */
+export function syncStatusLabel(status: SyncStatus): string {
+  return syncStatusLabels[status] ?? status;
+}
+
 export type QcFilter = "needs_qc" | "edited" | "missing_fields" | "low_confidence" | "recording_issues" | "pending_sync" | "all";
 
 export const qcFilters: Array<{ id: QcFilter; label: string }> = [
@@ -202,9 +214,12 @@ export function hasUnresolvedCriticalTranscriptFlag(record: TestRecord) {
 }
 
 export function recordNeedsQc(record: TestRecord) {
-  // QC sign-off is terminal for data-quality issues, but sync problems remain
-  // visible because the demo/export flows need to show pending local records.
-  if (record.qc_status === "Approved" && record.sync_status === "Synced") return false;
+  // QC sign-off is terminal for data-quality issues, but genuine sync
+  // problems remain visible because the demo/export flows need to show
+  // pending/failed records. "Local only" (no Supabase configured) is a
+  // resolved, by-design state, not a problem — an approved local-only record
+  // is exactly as "done" as an approved synced one.
+  if (record.qc_status === "Approved" && (record.sync_status === "Synced" || record.sync_status === "Local only")) return false;
   return (
     record.needs_qc ||
     record.requires_qc_verification ||

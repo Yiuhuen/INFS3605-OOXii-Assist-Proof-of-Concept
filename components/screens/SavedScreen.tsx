@@ -2,8 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, ChevronLeft, Clock, Plus } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
-import { processingStatusLabel, processingStatusTone, qcStatusLabel } from "@/lib/qc";
-import { isSupabaseConfigured } from "@/lib/supabase";
+import { processingStatusLabel, processingStatusTone, qcStatusLabel, syncStatusLabel } from "@/lib/qc";
 import { PrimaryButton, SecondaryButton, StatusBadge, WarningCard } from "@/components/ui";
 
 export function SavedScreen({
@@ -20,7 +19,11 @@ export function SavedScreen({
   onDashboard: () => void;
 }) {
   const savedTitle =
-    record.sync_status === "Pending sync" ? "Record saved offline" : record.sync_status === "Failed" ? "Record saved locally" : "Record saved";
+    record.sync_status === "Pending sync"
+      ? "Record saved offline"
+      : record.sync_status === "Failed" || record.sync_status === "Local only"
+        ? "Record saved locally"
+        : "Record saved";
   // Saving and processing are two different things — a green "saved" state
   // must never read as if transcript/field processing also finished, since
   // a failed recording still saves cleanly and still needs QC.
@@ -50,7 +53,7 @@ export function SavedScreen({
         <div className="flex items-center justify-between">
           <span className="text-sm opacity-70">Sync status</span>
           <StatusBadge
-            label={record.sync_status === "Synced" && !isSupabaseConfigured ? "Saved locally" : record.sync_status}
+            label={syncStatusLabel(record.sync_status)}
             tone={record.sync_status === "Synced" ? "good" : "warn"}
             icon={<Clock className="h-3.5 w-3.5" />}
           />

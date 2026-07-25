@@ -9,7 +9,7 @@ OOXii Assist is a working Proof of Concept for an offline-first multilingual gui
 5. guided testing prompts with client-facing language support and manual field entry
 6. compulsory local audio recording (or an explicit manual override) through the browser MediaRecorder API
 7. real live English transcription via the browser's SpeechRecognition API (Tok Pisin/Bislama have no live transcript in this PoC — manual entry instead), with edits preserved separately from the original
-8. mock AI extraction into structured, editable fields
+8. deterministic, rule-based extraction (no AI/network call — see `lib/fieldExtraction.ts`) into structured, editable fields
 9. local offline save
 10. optional Supabase sync
 11. QC review, filtering and correction
@@ -18,6 +18,8 @@ OOXii Assist is a working Proof of Concept for an offline-first multilingual gui
 14. field-ready display settings (brightness / contrast)
 
 The app intentionally does **not** produce a medical prescription, change the clinical testing sequence, collect personal client identifiers, handle payment, handle inventory, use GPS, or support Bluetooth group testing.
+
+**Local/offline demo mode is the assessed path for Week 7.** `npm install && npm run dev` with no environment variables at all is a complete, gradeable run of the app — every step above (recording, transcript, extraction, save, QC, export) works fully offline against `localStorage`/IndexedDB. Supabase (see [Supabase setup](#supabase-setup)) is optional cloud-sync polish on top of that, not a requirement.
 
 ## Live demo script
 
@@ -50,7 +52,7 @@ Recording is one screen with a swipeable prompt card (`components/screens/Record
 - IndexedDB for local audio blobs
 - Browser MediaRecorder API for audio recording
 - Browser SpeechSynthesis API for client-facing prompt audio
-- Real browser SpeechRecognition API for live English transcription (`lib/realSpeechRecognition.ts`, `lib/liveTranscript.ts`), plus mock (non-paid) AI field extraction
+- Real browser SpeechRecognition API for live English transcription (`lib/realSpeechRecognition.ts`, `lib/liveTranscript.ts`), plus deterministic, rule-based (non-paid, no network) field extraction (`lib/fieldExtraction.ts`)
 - Optional Supabase auth + database sync
 - Vercel-ready deployment
 
@@ -65,13 +67,26 @@ Real live transcription uses browser speech recognition and requires a supported
 
 Open the local URL shown in the terminal.
 
+To run the deterministic field-extraction/transcript-quality regression suite (`scripts/test-field-extraction.ts`, no browser needed):
+
+```bash
+npm run test:extraction
+```
+
 ## Browser & device notes
+
+Real live transcription depends on three things being true at once: **a supported browser** (Chrome/Edge), **a secure context** (`localhost` or HTTPS), and **microphone permission granted**. If any one of these isn't true, audio recording still proceeds normally and the app falls back to a manual transcript entry — the record is then automatically routed to QC rather than silently treated as complete.
 
 - **Chrome is the preferred browser for the live demo.** It has the most reliable `webkitSpeechRecognition` support. Recent Edge also works. Safari and Firefox either lack live English transcription entirely or support it inconsistently — the app still works in every browser, but falls back to the manual/QC path (below) instead of a live transcript.
 - **The page must be served over `localhost` or HTTPS.** Browsers refuse both microphone access and SpeechRecognition on a plain-HTTP origin (`window.isSecureContext` must be `true`). `npm run dev` on `localhost` and a Vercel deployment both satisfy this automatically.
 - **Audio recording works even when live transcription doesn't.** MediaRecorder (the actual audio capture) and SpeechRecognition (the live draft transcript) are two independent browser APIs. If SpeechRecognition isn't supported or the language pack has no live-transcript support (Tok Pisin/Bislama), recording still proceeds normally — the tester just types the transcript manually on the next screen instead of reviewing an auto-drafted one.
 - **The live transcript is always a draft, never a final answer.** It is shown as an editable "Corrected transcript" next to a read-only, never-overwritten "Raw transcript," and any record built from a manual entry or an uncertain transcript is automatically flagged `needs_qc` — see [Transcript and extraction editing rules](#transcript-and-extraction-editing-rules) and [QC review rules](#qc-review-rules) below.
 - **If the microphone is blocked or denied,** the app never fabricates a transcript. It saves an honest placeholder ("Recording not available (failed/manual override)"), requires a one-line manual reason before the tester can continue, and routes the record straight to QC. This was verified in a sandboxed/headless browser with no microphone device, which is a good stand-in for a live demo where mic permission gets denied by accident.
+- **Live transcription itself has not been exercised with a real physical microphone in the current development sandbox** (it has no audio input device) — only the no-microphone fallback path above has been verified there. Before relying on it in front of an audience, do a quick manual check on the actual demo machine: open the app in Chrome on `localhost`, tap **Start recording**, grant the microphone prompt, and confirm the live transcript panel fills in as you speak.
+
+### Admin diagnostic tool (STT)
+
+The recording screen has an "Admin diagnostic tool" panel (secure-context/origin/engine-status/permission details, plus a standalone "Test speech recognition only" button) for debugging live transcription. It is **off by default** so a normal demo never shows it — turn it on per-device via **More → Admin tools → "Show STT diagnostics"**, or force it on at build time with `NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG=true` (see `.env.example`).
 
 ## Demo reset (for markers/testers, not a normal field tool)
 
@@ -94,7 +109,7 @@ The app works fully without Supabase using local demo storage and demo login. To
 
 1. Create a Supabase project.
 2. Open the Supabase SQL editor.
-3. Run `supabase/schema.sql` (safe to re-run; it uses `create table if not exists` and `add column if not exists`).
+3. Run `supabase/schema.sql` (safe to re-run; it uses `create table if not exists` and `add column if not exists`). Its `public.test_records` columns are kept in sync with the `TestRecord` fields `lib/supabase.ts` actually uploads — if you add a field to `TestRecord` and want it to sync, add the matching column here and the matching key in `syncRecordToSupabase`.
 4. Run `supabase/seed.sql`.
 5. In Supabase Authentication settings, enable Email/Password sign-in.
 6. Copy `.env.example` to `.env.local` and add:
@@ -113,7 +128,7 @@ With these set, the "Use email login instead" option appears on the Tester setup
 - Structured test records are saved to `localStorage` immediately on save, regardless of connection.
 - Audio blobs are saved to IndexedDB keyed by record ID, so audio survives a page reload even offline.
 - The "Demo connection mode" selector on the Display settings screen lets you demo offline behaviour without disconnecting your machine.
-- When offline, records are saved with `sync_status: "Pending sync"`. When the app returns online, pending records are retried if Supabase is configured. In demo-only mode, the record stays local and the app shows a clear message that cloud sync is disabled.
+- Sync status is always honest about what actually happened, never optimistic: `"Local only"` (shown to the tester as **Saved locally**) when Supabase isn't configured — the record will never leave this device, by design, regardless of connection; `"Pending sync"` when Supabase is configured but hasn't synced yet (offline, or an online attempt hasn't run); `"Synced"` only after a real Supabase round-trip succeeds; `"Failed"` if a real attempt errors. A record is never labelled "Synced" unless it actually reached Supabase. The rest of the field workflow (save, QC, export) works identically either way.
 
 ## Recording is compulsory
 
@@ -130,7 +145,7 @@ The data model keeps the original transcript and any edits clearly separated so 
 
 - `raw_transcript_text` — immutable, produced from the recording (or a manual-override placeholder). Never edited in place.
 - `corrected_transcript_text` — optional tester/QC edit. Saved separately; the transcript screen always shows a **"Preserved"** badge next to the original alongside an **"Editable"** badge on the corrected copy.
-- `extracted_json` — structured fields produced by mock AI extraction from the raw or corrected transcript.
+- `extracted_json` — structured fields produced by the deterministic, rule-based extraction pass (`lib/fieldExtraction.ts`) from the raw or corrected transcript.
 - `edited_extracted_json` — set only once a tester/QC edits a field; never mutates `extracted_json`.
 - `extraction_source` — `raw_transcript`, `corrected_transcript`, or `manual_override`, recorded so QC knows what extraction ran against.
 - `edited_by_user` / `requires_qc_verification` — set together whenever a field is hand-edited; the captured-fields screen shows an **"Edited — verify in QC"** badge.
@@ -191,11 +206,11 @@ Language packs are JSON structures with:
 
 The prompt editor proves that prompts can be changed without engineering work.
 
-### Mock speech-to-text and AI extraction
+### Speech-to-text and field extraction
 
-The mock functions live in `lib/mockAi.ts`. Replace these later with API routes for real transcription and extraction.
+Speech-to-text is the real browser `SpeechRecognition` API (`lib/realSpeechRecognition.ts`, `lib/liveTranscript.ts`) for English — not a mock — with the browser/HTTPS/microphone requirements above. Field extraction is a deterministic, rule-based pass over the transcript (`lib/fieldExtraction.ts`, no AI/network call), which is why every extracted field always carries a confidence/source tag and stays subject to QC rather than being presented as a confirmed clinical fact.
 
-A production-ready approach would use:
+A production-ready approach would additionally use:
 
 - `/app/api/transcribe/route.ts` for speech-to-text
 - `/app/api/extract/route.ts` for structured extraction
@@ -250,7 +265,6 @@ lib/
   insights.ts
   languagePacks.ts
   liveTranscript.ts
-  mockAi.ts
   offlineDb.ts
   qc.ts
   realSpeechRecognition.ts
@@ -269,4 +283,6 @@ public/
 supabase/
   schema.sql
   seed.sql
+scripts/
+  test-field-extraction.ts
 ```

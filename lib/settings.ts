@@ -61,3 +61,30 @@ export function applyDisplaySettings(settings: DisplaySettings) {
   document.documentElement.dataset.brightness = settings.brightness;
   document.documentElement.dataset.contrast = settings.contrast;
 }
+
+const SHOW_STT_DIAGNOSTICS_KEY = "ooxii_assist_show_stt_diagnostics";
+
+/**
+ * Admin-only toggle (More → Admin tools) for the recording screen's speech
+ * recognition diagnostics panel — off by default so a normal demo run never
+ * shows the technical STT panel. Persisted locally so an admin doesn't have
+ * to re-enable it every session. See NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG in
+ * .env.example for the build-time alternative (e.g. for a dedicated QA build).
+ */
+export function loadShowSttDiagnostics(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(SHOW_STT_DIAGNOSTICS_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveShowSttDiagnostics(value: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(SHOW_STT_DIAGNOSTICS_KEY, value ? "true" : "false");
+  } catch {
+    // Private-mode browsers may block localStorage — the toggle just won't persist across reloads.
+  }
+}

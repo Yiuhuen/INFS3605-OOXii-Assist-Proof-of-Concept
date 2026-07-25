@@ -1,5 +1,6 @@
 export type LanguageCode = "en" | "tpi" | "bis";
-export type SyncStatus = "Pending sync" | "Synced" | "Failed";
+/** "Local only" = Supabase isn't configured for this deployment, so the record will never leave this device by design — distinct from "Pending sync" (Supabase configured, sync hasn't happened yet) and never displayed or exported as "Synced". */
+export type SyncStatus = "Pending sync" | "Synced" | "Failed" | "Local only";
 export type TestStatus = "Draft" | "Complete" | "Needs QC";
 export type QCStatus = "Unreviewed" | "In review" | "Corrected" | "Approved";
 export type ExtractionSource = "raw_transcript" | "corrected_transcript" | "manual_override";
@@ -7,9 +8,10 @@ export type RecordingStatus = "recorded" | "failed" | "not_recorded" | "manual_o
 export type ConnectionMode = "browser" | "force-online" | "force-offline";
 
 /**
- * Lifecycle of the local, offline-capable mock processing (translation + field
- * extraction) for a record — never a paid API call. See lib/qc.ts for how this
- * is derived and lib/mockAi.ts for the cost-safe future-AI design notes.
+ * Lifecycle of the local, offline-capable deterministic processing (translation
+ * + field extraction) for a record — never a paid API call. See lib/qc.ts for
+ * how this is derived and lib/fieldExtraction.ts for the cost-safe future-AI
+ * design notes.
  *  - not_processed: no transcript content exists yet to work from.
  *  - ready_for_review: local mock processing produced usable fields, nothing flagged.
  *  - needs_qc: local mock flagged low confidence, missing fields, or a manual fallback.
@@ -68,7 +70,7 @@ export const REQUIRED_EXTRACTED_FIELDS: Array<keyof ExtractedFields> = [
   "glasses_selected"
 ];
 
-/** Literal value stored for a required/populate field the local extraction (or manual entry) could not determine. Never a guess — see lib/mockAi.ts. */
+/** Literal value stored for a required/populate field the local extraction (or manual entry) could not determine. Never a guess — see lib/fieldExtraction.ts. */
 export const UNKNOWN_FIELD_VALUE = "UNKNOWN";
 
 export type ManualExtractedFields = Omit<ExtractedFields, "missing_fields" | "confidence_score" | "field_confidence">;

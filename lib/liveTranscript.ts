@@ -30,8 +30,8 @@ export function isLiveTranscriptSupportedLanguage(language: LanguageCode): boole
 }
 
 /**
- * Local-only text pass used to feed the (also local, keyword-based) field
- * extractor in lib/mockAi.ts. English passes through unchanged. Other
+ * Local-only text pass used to feed the (also local, deterministic) field
+ * extractor in lib/fieldExtraction.ts. English passes through unchanged. Other
  * languages get a plainly-labeled `[mock translation]` prefix rather than any
  * invented translation — the UI shows this transcript as "Local mock only".
  */

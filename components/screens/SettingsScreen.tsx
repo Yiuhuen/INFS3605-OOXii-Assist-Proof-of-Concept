@@ -3,7 +3,7 @@
 import { LogOut, ShieldCheck } from "lucide-react";
 import { brightnessLabels, contrastLabels, speechSpeedLabels, type Brightness, type ContrastTheme, type DisplaySettings } from "@/lib/settings";
 import type { ConnectionMode, LanguagePack, Tester } from "@/lib/types";
-import { DangerButton, FormField, InfoCard, PrimaryButton, PromptCard, SecondaryButton, SelectField, StatusBadge } from "@/components/ui";
+import { DangerButton, FormField, InfoCard, PrimaryButton, PromptCard, SelectField, StatusBadge } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { isSpeechSupported, type SpeechSpeed } from "@/lib/speech";
 

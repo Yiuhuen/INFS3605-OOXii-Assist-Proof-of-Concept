@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
 import { UNKNOWN_FIELD_VALUE, type ExtractedFields, type FieldConfidenceLevel, type ManualExtractedFields, type TestRecord } from "@/lib/types";
-import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasonGroups, type QcFilter } from "@/lib/qc";
+import { filterRecords, processingStatusLabel, processingStatusTone, qcFilters, qcReasonGroups, syncStatusLabel, type QcFilter } from "@/lib/qc";
 import { FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
 import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
 import { Disclosure, EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField, type BadgeTone } from "@/components/ui";
@@ -113,6 +113,7 @@ export function QcScreen({
                   {record.recording_status !== "recorded" && <StatusBadge label="Recording issue" tone="warn" />}
                   {record.sync_status === "Pending sync" && <StatusBadge label="Pending sync" tone="warn" />}
                   {record.sync_status === "Failed" && <StatusBadge label="Sync failed" tone="danger" />}
+                  {record.sync_status === "Local only" && <StatusBadge label={syncStatusLabel(record.sync_status)} tone="neutral" />}
                   {/* processingStatusLabel already reads "Needs QC" once processing_status is "needs_qc" — only repeat it here when the transcript isn't captured yet, so the same risk isn't shown twice. "Complete" is never otherwise shown, so it stays unconditional. */}
                   {record.qc_status === "Approved" ? (
                     <StatusBadge label="Complete" tone="good" />

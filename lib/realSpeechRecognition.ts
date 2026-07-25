@@ -13,7 +13,44 @@ function debugLog(scope: string, ...args: unknown[]) {
   if (DEBUG_STT) console.debug(`[real-speech-recognition:${scope}]`, ...args);
 }
 
-type SpeechRecognitionConstructor = new () => any;
+/**
+ * Minimal shape of the browser's SpeechRecognition instance/event this module
+ * actually touches — there is no official lib.dom type for this API, and the
+ * full spec surface is much larger than what's used here.
+ */
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  [index: number]: { transcript: string; confidence?: number } | undefined;
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: { length: number; [index: number]: SpeechRecognitionResultLike };
+}
+interface SpeechRecognitionErrorEventLike {
+  error?: string;
+}
+interface SpeechRecognitionInstance {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onstart: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onsoundstart: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onspeechend: (() => void) | null;
+  onsoundend: (() => void) | null;
+  onaudioend: (() => void) | null;
+  onnomatch: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
 
 export function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
   if (typeof window === "undefined") return null;
@@ -166,7 +203,7 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
     callbacks.onLifecycleEvent?.("nomatch");
   };
 
-  recognition.onresult = (event: any) => {
+  recognition.onresult = (event: SpeechRecognitionEventLike) => {
     const chunks: RecognitionResultChunk[] = [];
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const result = event.results[i];
@@ -179,7 +216,7 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
     callbacks.onLifecycleEvent?.("result");
   };
 
-  recognition.onerror = (event: any) => {
+  recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
     const code: string = event?.error ?? "unknown";
     debugLog("onerror", code);
     callbacks.onError?.(code);
