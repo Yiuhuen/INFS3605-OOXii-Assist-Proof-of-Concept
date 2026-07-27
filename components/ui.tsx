@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ButtonHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
-import { ChevronDown, ChevronRight, Globe, Wifi, WifiOff } from "lucide-react";
+import { ChevronDown, ChevronRight, Globe, Wifi, WifiOff, X } from "lucide-react";
 import type { WorkflowStepId } from "@/lib/workflow";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -255,6 +255,91 @@ export function CheckboxCard({
       <span className={`checkbox-box ${checked ? "is-checked" : ""}`}>{checked && "✓"}</span>
       <span className="text-sm font-semibold leading-snug">{label}</span>
     </button>
+  );
+}
+
+/** Generic fixed-overlay confirmation dialog — stacked full-width buttons so the confirm label never has to shrink/wrap on a narrow phone screen. */
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  cancelLabel = "Cancel",
+  onConfirm,
+  onCancel
+}: {
+  open: boolean;
+  title: string;
+  body: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
+      style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-field-line bg-field-card p-4 shadow-xl">
+        <p className="text-base font-black">{title}</p>
+        <p className="mt-2 text-sm opacity-80">{body}</p>
+        <div className="mt-4 space-y-2">
+          <SecondaryButton fullWidth onClick={onCancel}>
+            {cancelLabel}
+          </SecondaryButton>
+          <DangerButton fullWidth onClick={onConfirm}>
+            {confirmLabel}
+          </DangerButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The one legitimate place a one-screen workflow screen is allowed to
+ * scroll: a full-detail expand (full transcript, full record list, full
+ * field evidence) that the default collapsed view only shows a preview or
+ * count of. Closed by default; opening it never affects the page behind it,
+ * since it's a fixed overlay with its own internal `overflow-y-auto`.
+ */
+export function DetailModal({
+  open,
+  title,
+  onClose,
+  children
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
+      style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-field-line bg-field-card shadow-xl sm:max-w-lg">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-field-line px-4 py-3">
+          <p className="text-base font-black">{title}</p>
+          <button
+            aria-label="Close"
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-field-line bg-field-surface transition hover:bg-field-card"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
+      </div>
+    </div>
   );
 }
 

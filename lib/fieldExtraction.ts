@@ -38,7 +38,11 @@ export const FIELD_DISPLAY_LABELS: Record<keyof ManualExtractedFields, string> =
   right_eye_distance_result: "Right eye distance result",
   left_eye_distance_result: "Left eye distance result",
   final_readable_line: "Final readable line",
-  glasses_selected: "Glasses selected",
+  // "/ dispensed" disambiguates from current_glasses ("does the client
+  // already have glasses?") — the two were repeatedly confused when both
+  // rendered as truncated "Glasses…" cards. This field is only ever the
+  // outcome of the fitting step, never the client's existing glasses.
+  glasses_selected: "Glasses selected / dispensed",
   comfort_response: "Comfort response",
   cataract_history_confirmed: "Cataract history confirmed",
   current_glasses: "Current glasses",

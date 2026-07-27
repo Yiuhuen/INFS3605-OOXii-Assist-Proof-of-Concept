@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmDialog } from "@/components/ui";
 import { LoginScreen } from "@/components/screens/LoginScreen";
 import { Dashboard } from "@/components/screens/Dashboard";
 import { MoreScreen } from "@/components/screens/MoreScreen";
@@ -101,6 +102,9 @@ type Screen =
   | "insights"
   | "admin"
   | "settings";
+
+/** The 8 priority workflow screens that get the fixed one-screen shell (OneScreenShell) — see the `<main>` render below. */
+const ONE_SCREEN_WORKFLOW = new Set<Screen>(["dashboard", "client", "recording", "transcript", "fields", "saved", "qc", "export"]);
 
 const blankClient = (): ClientRecord => ({
   id: generateClientId(),
@@ -262,6 +266,12 @@ export default function Home() {
   const [displaySettings, setDisplaySettings] = useState<DisplaySettings>(loadDisplaySettings());
   /** More → Admin tools → "Show STT diagnostics" — off by default; loaded from localStorage on mount below. */
   const [showSttDiagnostics, setShowSttDiagnostics] = useState(false);
+  /** How many recording attempts this client's current in-progress record has gone through — starts at 1, +1 per confirmed Rerecord. Reset to 1 whenever a fresh client starts (resetTest). */
+  const [recordingAttemptNumber, setRecordingAttemptNumber] = useState(1);
+  /** True once Rerecord has been used at least once for the current client — frozen into the saved record's rerecord_used field. */
+  const [rerecordUsed, setRerecordUsed] = useState(false);
+  /** "Discard this recording and rerecord?" confirmation — shared by RecordingScreen and TranscriptScreen. */
+  const [rerecordConfirmOpen, setRerecordConfirmOpen] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -576,9 +586,16 @@ export default function Home() {
     saveShowSttDiagnostics(value);
   }
 
-  function resetTest() {
-    setClient(blankClient());
-    setHasDraftClient(false);
+  /**
+   * Clears every piece of state scoped to a single recording attempt —
+   * audio, transcript (raw/English/corrected), segments, prompt/unclear
+   * markers, extraction results, and QC-input signals derived from any of
+   * the above. Deliberately never touches client identity (client,
+   * hasDraftClient) or post-save state (latestRecord, syncMessage) — those
+   * have their own lifecycles. Shared by resetTest() (new client) and
+   * resetRecordingAttempt() (Rerecord — same client, clean second attempt).
+   */
+  function clearRecordingAttemptState() {
     setCurrentStepIndex(0);
     setManualFields(createEmptyManualFields());
     setRecording(false);
@@ -601,6 +618,8 @@ export default function Home() {
     setTranscriptUnavailableReason(null);
     setTranscriptEngineStatus("idle");
     setLastTranscriptError("");
+    setLastSttEvent("");
+    setSttResultEventCount(0);
     intentionalStopRef.current = false;
     setPromptMarkers([]);
     setUnclearSegments([]);
@@ -620,8 +639,45 @@ export default function Home() {
     setFieldsReviewedConfirmed(false);
     setAutoFillSummary(null);
     setFieldSuggestions({});
+  }
+
+  function resetTest() {
+    setClient(blankClient());
+    setHasDraftClient(false);
+    clearRecordingAttemptState();
+    setRecordingAttemptNumber(1);
+    setRerecordUsed(false);
     setLatestRecord(null);
     setSyncMessage("");
+  }
+
+  /**
+   * "Rerecord" (RecordingScreen and TranscriptScreen, after a confirm
+   * dialog) — discards only the current recording attempt for the SAME
+   * anonymous client. Client identity, language, tester, and site/session
+   * context are untouched; nothing has been saved to a TestRecord yet at
+   * this point in the flow, so there is nothing to un-save. Always routes
+   * back to RecordingScreen at prompt 1 with a clean slate (see the
+   * confirmRerecord caller in the render below).
+   */
+  function resetRecordingAttempt() {
+    clearRecordingAttemptState();
+    setRecordingAttemptNumber((prev) => prev + 1);
+    setRerecordUsed(true);
+  }
+
+  function requestRerecord() {
+    setRerecordConfirmOpen(true);
+  }
+
+  function cancelRerecord() {
+    setRerecordConfirmOpen(false);
+  }
+
+  function confirmRerecord() {
+    setRerecordConfirmOpen(false);
+    resetRecordingAttempt();
+    setScreen("recording");
   }
 
   /**
@@ -1477,6 +1533,8 @@ export default function Home() {
       extraction_safety_status: extractionSafetyStatusPreview,
       fields_reviewed_by_tester: fieldsReviewedConfirmed,
       demo_helper_used: demoHelperUsed,
+      recording_attempt_number: recordingAttemptNumber,
+      rerecord_used: rerecordUsed,
       client_snapshot: client,
       created_at: now,
       updated_at: now
@@ -1650,8 +1708,34 @@ export default function Home() {
 
   const isAuthenticated = Boolean(authMode);
 
+  // The 8 core workflow screens use a fixed one-screen shell (see
+  // OneScreenShell) sized to exactly fill the viewport, with no page-level
+  // scroll — each screen fits its own default content into that fixed
+  // height. Everything else (login, language/training, and the More/
+  // Settings/Admin/Insights secondary screens) keeps the original
+  // scrollable page treatment, since those were never part of the
+  // "fits in one screen" requirement and don't need the same rigidity.
+  const isOneScreenWorkflow = ONE_SCREEN_WORKFLOW.has(screen);
+
   return (
-    <main className="mx-auto min-h-screen w-full max-w-md px-4 py-6 sm:max-w-lg">
+    <main
+      className={
+        isOneScreenWorkflow
+          ? "mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden px-4 sm:max-w-lg"
+          : "mx-auto min-h-[100dvh] w-full max-w-md overflow-y-auto px-4 py-6 sm:max-w-lg"
+      }
+      style={
+        isOneScreenWorkflow
+          ? {
+              paddingTop: "max(0.75rem, calc(env(safe-area-inset-top) + 0.25rem))",
+              paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))"
+            }
+          : {
+              paddingTop: "max(1.5rem, calc(env(safe-area-inset-top) + 0.5rem))",
+              paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))"
+            }
+      }
+    >
       {screen === "login" && (
         <LoginScreen
           onDemoLogin={beginDemoLogin}
@@ -1736,7 +1820,6 @@ export default function Home() {
           step={currentStep}
           stepIndex={currentStepIndex}
           totalSteps={activePack.prompts_json.length}
-          upcomingSteps={activePack.prompts_json.slice(currentStepIndex + 1)}
           languageName={activePack.name}
           languageCode={activePack.code}
           speechSpeed={displaySettings.speechSpeed}
@@ -1785,6 +1868,7 @@ export default function Home() {
           pauseRecording={pauseRecording}
           resumeRecording={resumeRecording}
           stopRecording={stopRecording}
+          onRerecordRequest={requestRerecord}
           onBack={currentStepIndex === 0 ? () => setScreen("client") : undefined}
           onNextPrompt={goToNextPrompt}
           onPreviousPrompt={goToPreviousPrompt}
@@ -1814,6 +1898,7 @@ export default function Home() {
           onGenerateDraft={regenerateTranscriptDraft}
           onNext={goToCapturedFields}
           onBack={() => setScreen("recording")}
+          onRerecordRequest={requestRerecord}
           qualityReport={transcriptQualityReport}
           translationReport={translationSafetyReport}
           appliedCorrections={appliedCorrections}
@@ -1917,6 +2002,15 @@ export default function Home() {
           onBack={() => setScreen("dashboard")}
         />
       )}
+
+      <ConfirmDialog
+        open={rerecordConfirmOpen}
+        title="Discard this recording and rerecord?"
+        body="This will remove the current audio and draft transcript for this anonymous client. You can then record the conversation again."
+        confirmLabel="Discard and rerecord"
+        onConfirm={confirmRerecord}
+        onCancel={cancelRerecord}
+      />
     </main>
   );
 }

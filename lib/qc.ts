@@ -172,16 +172,21 @@ export function syncStatusLabel(status: SyncStatus): string {
   return syncStatusLabels[status] ?? status;
 }
 
-export type QcFilter = "needs_qc" | "edited" | "missing_fields" | "low_confidence" | "recording_issues" | "pending_sync" | "all";
+export type QcFilter = "needs_qc" | "edited" | "missing_fields" | "reviewed" | "all";
 
+/**
+ * Compact filter set — five short labels that fit a phone width without a
+ * cut-off tab. The old low-confidence / recording-issue / pending-sync
+ * filters were subsets of "Needs QC" in practice (every such record needs
+ * QC anyway); their signals still appear per-record in qcReviewIssues and
+ * the record summary, so nothing is lost — only the seven-pill tab overflow.
+ */
 export const qcFilters: Array<{ id: QcFilter; label: string }> = [
   { id: "needs_qc", label: "Needs QC" },
   { id: "edited", label: "Edited" },
-  { id: "missing_fields", label: "Missing fields" },
-  { id: "low_confidence", label: "Low confidence" },
-  { id: "recording_issues", label: "Recording issues" },
-  { id: "pending_sync", label: "Pending sync" },
-  { id: "all", label: "All records" }
+  { id: "missing_fields", label: "Missing" },
+  { id: "reviewed", label: "Reviewed" },
+  { id: "all", label: "All" }
 ];
 
 export function isLowConfidence(record: TestRecord) {
@@ -354,6 +359,225 @@ export function qcReasons(record: TestRecord): string[] {
   return buildCategorizedQcReasons(record).map((item) => item.reason);
 }
 
+/* ---------------------------------------------------------------------------
+ * Structured QC review issues — the reviewer-facing checklist.
+ * ---------------------------------------------------------------------------
+ * qcReasons/qcReasonGroups above return plain strings and are kept for the
+ * audit trail and tests. This is the presentation the QC screen renders: one
+ * row per issue, sentence case, severity-ranked, with the concrete thing to
+ * check ("Review field" vs "Review transcript") instead of an undifferentiated
+ * wall of uppercase pills. Same underlying predicates — no QC logic changes.
+ */
+
+export type QcIssueSeverity = "high" | "medium" | "low";
+export type QcIssueSource = "Field" | "Transcript" | "Recording" | "Prompt";
+
+export interface QcIssue {
+  id: string;
+  severity: QcIssueSeverity;
+  /** Short sentence-case title, e.g. "Cataract history confirmed not captured". */
+  title: string;
+  /** One-line explanation of what to check and why. */
+  detail: string;
+  source: QcIssueSource;
+}
+
+const SEVERITY_RANK: Record<QcIssueSeverity, number> = { high: 0, medium: 1, low: 2 };
+
+/**
+ * Priority order mirrors the reviewer's actual workflow: missing required
+ * data first, then manual edits, then recording/transcript trust issues,
+ * then prompt coverage. Pure status facts (Unreviewed, Pending sync) are
+ * deliberately NOT issues — they belong in the record summary, not the
+ * checklist, because there is nothing for the reviewer to go check.
+ */
+export function qcReviewIssues(record: TestRecord): QcIssue[] {
+  if (record.qc_status === "Approved") return [];
+  const issues: QcIssue[] = [];
+  const push = (issue: Omit<QcIssue, "id">) => issues.push({ id: `${issue.source}-${issues.length}-${issue.title.slice(0, 24)}`, ...issue });
+
+  const effectiveFields = record.edited_extracted_json ?? record.extracted_json;
+  const fieldConfidenceMap = effectiveFields.field_confidence;
+  const highRiskSet = new Set<string>(HIGH_RISK_EXTRACTED_FIELDS);
+
+  // 1. Missing required data (high)
+  if (fieldConfidenceMap) {
+    (Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>).forEach((key) => {
+      const meta = fieldConfidenceMap[key];
+      if (!meta || !highRiskSet.has(key)) return;
+      if (!meta.value.trim()) {
+        push({
+          severity: "high",
+          title: `${FIELD_DISPLAY_LABELS[key]} not captured`,
+          detail: "This high-risk field was not found in the transcript. Enter it from the audio or confirm it is genuinely unknown.",
+          source: "Field"
+        });
+      }
+    });
+  }
+
+  // 2. Manual edits (high for high-risk fields, medium otherwise)
+  let manualHighRiskCount = 0;
+  if (fieldConfidenceMap) {
+    (Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>).forEach((key) => {
+      const meta = fieldConfidenceMap[key];
+      if (!meta || meta.source !== "manual" || !meta.value.trim()) return;
+      if (highRiskSet.has(key)) {
+        manualHighRiskCount += 1;
+        push({
+          severity: "high",
+          title: `${FIELD_DISPLAY_LABELS[key]} was manually entered`,
+          detail: "Check the manual value against the transcript or audio before approval.",
+          source: "Field"
+        });
+      }
+    });
+  }
+  if (record.edited_by_user && manualHighRiskCount === 0) {
+    push({
+      severity: "medium",
+      title: "Fields were edited by the tester",
+      detail: "Compare the edited values against the transcript before approval.",
+      source: "Field"
+    });
+  }
+
+  // Per-field extraction trust signals
+  if (fieldConfidenceMap) {
+    (Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>).forEach((key) => {
+      const meta = fieldConfidenceMap[key];
+      if (!meta || meta.source === "manual" || !meta.value.trim()) return;
+      if (meta.confidence === "low") {
+        push({
+          severity: "medium",
+          title: `${FIELD_DISPLAY_LABELS[key]} extracted with low confidence`,
+          detail: meta.reason ?? "Verify this value against the audio.",
+          source: "Field"
+        });
+      }
+    });
+  }
+  if (fieldConfidenceMap && !record.fields_reviewed_by_tester && Object.values(fieldConfidenceMap).some((meta) => meta?.requiresReview)) {
+    push({
+      severity: "medium",
+      title: "Draft fields not confirmed by the tester",
+      detail: "The tester saved without confirming the field review checklist.",
+      source: "Field"
+    });
+  }
+
+  // 3. Recording / transcript issues
+  if (usedManualOverride(record)) {
+    push({
+      severity: "medium",
+      title: "Manual recording override used",
+      detail: "Audio was unavailable or skipped, so transcript evidence is weaker.",
+      source: "Recording"
+    });
+  } else if (recordingIncomplete(record)) {
+    push({
+      severity: "medium",
+      title: `Recording ${record.recording_status.replace("_", " ")}`,
+      detail: "The audio recording did not complete normally for this test.",
+      source: "Recording"
+    });
+  }
+  if (record.recording_status === "recorded" && !record.raw_transcript_text.trim()) {
+    push({
+      severity: "medium",
+      title: "Audio recorded but no transcript captured",
+      detail: "Listen to the audio and add or correct the transcript manually.",
+      source: "Transcript"
+    });
+  }
+  if (hasUnclearSegments(record)) {
+    push({
+      severity: "medium",
+      title: `${record.unclear_segments.length} section${record.unclear_segments.length === 1 ? "" : "s"} marked unclear`,
+      detail: "The tester flagged moments they could not hear clearly — verify them against the audio.",
+      source: "Transcript"
+    });
+  }
+  for (const flag of record.transcript_quality_flags) {
+    if (flag.type === "possible_misrecognition" && flag.suggestedText && record.unresolved_transcript_flag_ids.includes(flag.id)) {
+      push({
+        severity: "medium",
+        title: `Possible mishearing: "${flag.originalText}" may mean "${flag.suggestedText}"`,
+        detail: "Confirm the wording against the audio before trusting extracted values.",
+        source: "Transcript"
+      });
+    }
+  }
+  if (record.transcript_quality_flags.some((flag) => flag.type === "ambiguous_negation")) {
+    push({
+      severity: "high",
+      title: "Can / cannot ambiguity in transcript",
+      detail: "The transcript contains both positive and negative readings — resolve which was said.",
+      source: "Transcript"
+    });
+  }
+  if (record.transcript_quality_flags.some((flag) => flag.type === "clinical_contradiction")) {
+    push({
+      severity: "high",
+      title: "Eye-side ambiguity in transcript",
+      detail: "Right/left eye references conflict — verify which eye each result belongs to.",
+      source: "Transcript"
+    });
+  }
+  if (record.translation_review_required) {
+    push({
+      severity: "medium",
+      title: "Translation requires review",
+      detail: "The English processing copy is an unverified draft translation.",
+      source: "Transcript"
+    });
+  }
+  if (record.corrections_applied.some((correction) => correction.affectsClinicalMeaning)) {
+    push({
+      severity: "medium",
+      title: "Clinical wording corrected after transcription",
+      detail: "A correction touched clinically significant wording — confirm it against the audio.",
+      source: "Transcript"
+    });
+  }
+  if (record.extraction_safety_status === "draft_review_required") {
+    push({
+      severity: "medium",
+      title: "Extraction based on a flagged transcript",
+      detail: "Field drafts came from a transcript with quality or translation risk.",
+      source: "Transcript"
+    });
+  }
+  if (record.demo_helper_used) {
+    push({
+      severity: "high",
+      title: "Demo helper transcript used",
+      detail: "This transcript was inserted by the demo helper, not captured from a real recording.",
+      source: "Transcript"
+    });
+  }
+
+  // 4. Prompt coverage
+  if (record.has_unvisited_prompts) {
+    push({
+      severity: "low",
+      title: "Some prompts were not viewed",
+      detail: "One or more clinical prompt cards were never opened during this test.",
+      source: "Prompt"
+    });
+  }
+  if (record.has_unrecorded_viewed_prompts) {
+    push({
+      severity: "low",
+      title: "Some prompts were not captured in audio",
+      detail: "Prompts were viewed while recording was not active, so there is no audio evidence for them.",
+      source: "Prompt"
+    });
+  }
+
+  return issues.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+}
+
 /** Grouped for display — see components/screens/QcScreen.tsx, which renders each non-empty group under its own short header instead of one undifferentiated badge row. */
 export function qcReasonGroups(record: TestRecord): Array<{ category: QcReasonCategory; reasons: string[] }> {
   const categorized = buildCategorizedQcReasons(record);
@@ -371,12 +595,8 @@ export function filterRecords(records: TestRecord[], filter: QcFilter): TestReco
       return records.filter((record) => record.edited_by_user);
     case "missing_fields":
       return records.filter(hasMissingFields);
-    case "low_confidence":
-      return records.filter(isLowConfidence);
-    case "recording_issues":
-      return records.filter(recordingIncomplete);
-    case "pending_sync":
-      return records.filter((record) => record.sync_status === "Pending sync");
+    case "reviewed":
+      return records.filter((record) => record.qc_status === "Approved");
     case "all":
     default:
       return records;

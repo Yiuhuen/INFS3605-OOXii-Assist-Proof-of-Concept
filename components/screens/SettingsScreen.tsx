@@ -58,11 +58,11 @@ export function SettingsScreen({
 
       <div className="mb-6">
         <p className="field-label">Brightness</p>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
           {brightnessOptions.map((option) => (
             <button
               key={option.value}
-              className={option.value === settings.brightness ? "primary-button" : "secondary-button"}
+              className={`${option.value === settings.brightness ? "primary-button" : "secondary-button"} px-2 text-sm sm:px-5 sm:text-base`}
               onClick={() => onChange({ ...settings, brightness: option.value })}
             >
               {option.label}
@@ -91,11 +91,11 @@ export function SettingsScreen({
 
       <div className="mb-6">
         <p className="field-label">Speech speed</p>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
           {speechSpeedOptions.map((option) => (
             <button
               key={option.value}
-              className={option.value === settings.speechSpeed ? "primary-button" : "secondary-button"}
+              className={`${option.value === settings.speechSpeed ? "primary-button" : "secondary-button"} px-2 text-sm sm:px-5 sm:text-base`}
               onClick={() => onChange({ ...settings, speechSpeed: option.value })}
             >
               {option.label}

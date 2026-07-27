@@ -5,8 +5,8 @@ import { Check, Download, ShieldCheck } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
 import { LONGLIST_CSV_COLUMNS } from "@/lib/csv";
 import { recordNeedsQc } from "@/lib/qc";
-import { DangerButton, Disclosure, InfoCard, MetricCard, PrimaryButton, SecondaryButton, WarningCard } from "@/components/ui";
-import { ScreenHeader } from "@/components/ScreenHeader";
+import { DangerButton, DetailModal, MetricCard, PrimaryButton, SecondaryButton, WarningCard } from "@/components/ui";
+import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
 
 /** "id"/"qc" are acronyms and stay fully uppercase; only the first word is otherwise capitalised (sentence case) — matches column names used elsewhere in the app. */
 const ACRONYM_WORDS = new Set(["id", "qc"]);
@@ -35,7 +35,7 @@ function FieldChecklist({ fields }: { fields: readonly string[] }) {
   );
 }
 
-/** Presentation-only grouping of AUDIT_CSV_COLUMNS for the collapsible sections below — keep in sync with lib/csv.ts if that list changes. */
+/** Presentation-only grouping of AUDIT_CSV_COLUMNS for the "included fields" detail modal — keep in sync with lib/csv.ts if that list changes. */
 const AUDIT_FIELD_GROUPS: Array<{ title: string; fields: readonly string[] }> = [
   { title: "Core test fields", fields: LONGLIST_CSV_COLUMNS },
   {
@@ -79,100 +79,118 @@ export function ExportScreen({
   const needsQc = records.filter(recordNeedsQc).length;
   const ready = records.length - needsQc;
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [fieldsModal, setFieldsModal] = useState<"longlist" | "audit" | null>(null);
 
   return (
-    <section className="pb-8">
-      <ScreenHeader title="Export records" onBack={onBack} isOnline={isOnline} />
-      <p className="mb-5 text-sm opacity-70">Download non-personal testing records for reporting, QC, and OOXii operations.</p>
-
-      <div className="mb-4 grid grid-cols-2 gap-3">
-        <MetricCard value={records.length} label="Total records" />
-        <MetricCard value={ready} label="Ready to export" tone="good" />
-        <MetricCard value={needsQc} label="Needs QC" tone="danger" />
-        <MetricCard value={pending} label="Pending sync" tone="gold" />
-      </div>
-
-      {needsQc > 0 && (
-        <div className="mb-5">
-          <WarningCard>Some records still require review before final reporting.</WarningCard>
-        </div>
-      )}
-
-      <div className="space-y-6">
-        <div className="field-card">
-          <p className="font-bold">A. OOXii Data Longlist</p>
-          <p className="mt-1 mb-4 text-sm opacity-70">
-            Core operational dataset for stock, QC, and reporting. Includes captured test fields and statuses. No raw
-            transcript text. Anonymous client IDs only.
-          </p>
-          <Disclosure label={`Included fields (${LONGLIST_CSV_COLUMNS.length})`}>
-            <FieldChecklist fields={LONGLIST_CSV_COLUMNS} />
-          </Disclosure>
-          <PrimaryButton fullWidth className="mt-5" icon={<Download className="h-5 w-5" />} disabled={records.length === 0} onClick={onExportLonglist}>
-            Download OOXii Data Longlist
-          </PrimaryButton>
-        </div>
-
-        <div className="field-card">
-          <p className="font-bold">B. Full Non-Personal Audit Longlist</p>
-          <p className="mt-1 mb-4 text-sm opacity-70">
-            Full non-personal audit trail for QC review. Includes transcript versions, prompt markers, recording status,
-            confidence flags, and timestamps. Anonymous IDs only.
-          </p>
-
-          <div className="divide-y divide-field-line">
-            {AUDIT_FIELD_GROUPS.map((group) => (
-              <Disclosure key={group.title} label={`${group.title} (${group.fields.length})`}>
-                <FieldChecklist fields={group.fields} />
-              </Disclosure>
-            ))}
-          </div>
-
-          <div className="mt-4">
-            <InfoCard icon={<ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />}>
-              No names, DOB, phone numbers, addresses, or GPS are collected or exported.
-            </InfoCard>
-          </div>
-
-          <PrimaryButton fullWidth className="mt-5" icon={<Download className="h-5 w-5" />} disabled={records.length === 0} onClick={onExportAudit}>
-            Download Full Audit Longlist
-          </PrimaryButton>
-        </div>
-      </div>
-
-      <div className="mt-6 space-y-3">
-        {needsQc > 0 && (
-          <SecondaryButton fullWidth onClick={onReviewQc}>
-            Review remaining QC records first
-          </SecondaryButton>
-        )}
-        {confirmingClear ? (
-          <div className="space-y-3 rounded-2xl border border-[var(--danger)] p-4">
-            <WarningCard>
-              This permanently deletes all {records.length} local demo record{records.length === 1 ? "" : "s"} and their
-              audio from this device. This cannot be undone.
-            </WarningCard>
-            <div className="flex gap-3">
-              <SecondaryButton fullWidth onClick={() => setConfirmingClear(false)}>
-                Cancel
-              </SecondaryButton>
-              <DangerButton
-                fullWidth
-                onClick={() => {
-                  setConfirmingClear(false);
-                  onClear();
-                }}
-              >
-                Yes, delete all records
-              </DangerButton>
+    <OneScreenShell
+      header={<CompactHeader title="Export" onBack={onBack} isOnline={isOnline} />}
+      footer={
+        <BottomActionBar className="flex-col items-stretch gap-2">
+          {needsQc > 0 && (
+            <SecondaryButton fullWidth className="py-2 text-sm" onClick={onReviewQc}>
+              Review remaining QC records first
+            </SecondaryButton>
+          )}
+          {confirmingClear ? (
+            <div className="space-y-2 rounded-2xl border border-[var(--danger)] p-3">
+              <WarningCard>
+                <span className="line-clamp-2">This permanently deletes all {records.length} local record{records.length === 1 ? "" : "s"} and their audio. Cannot be undone.</span>
+              </WarningCard>
+              <div className="flex gap-2">
+                <SecondaryButton fullWidth className="flex-1 py-2 text-sm" onClick={() => setConfirmingClear(false)}>
+                  Cancel
+                </SecondaryButton>
+                <DangerButton
+                  fullWidth
+                  className="flex-1 py-2 text-sm"
+                  onClick={() => {
+                    setConfirmingClear(false);
+                    onClear();
+                  }}
+                >
+                  Delete all
+                </DangerButton>
+              </div>
             </div>
+          ) : (
+            <DangerButton fullWidth className="py-2 text-sm" disabled={records.length === 0} onClick={() => setConfirmingClear(true)}>
+              Clear local demo records
+            </DangerButton>
+          )}
+        </BottomActionBar>
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-y-auto">
+        <div className="grid shrink-0 grid-cols-2 gap-2">
+          <MetricCard value={records.length} label="Total records" />
+          <MetricCard value={ready} label="Ready to export" tone="good" />
+          <MetricCard value={needsQc} label="Needs QC" tone="danger" />
+          <MetricCard value={pending} label="Pending sync" tone="gold" />
+        </div>
+
+        {needsQc > 0 && (
+          <div className="shrink-0">
+            <WarningCard>
+              <span className="line-clamp-1">Some records still require review before final reporting.</span>
+            </WarningCard>
           </div>
-        ) : (
-          <DangerButton fullWidth disabled={records.length === 0} onClick={() => setConfirmingClear(true)}>
-            Clear local demo records
-          </DangerButton>
         )}
+
+        {/* shrink-0 so the export cards can never be clipped — the content column's fallback scroll keeps them reachable on tiny viewports. */}
+        <div className="flex shrink-0 flex-col gap-2">
+          <div className="field-card shrink-0">
+            <div className="flex items-center justify-between gap-2">
+              <p className="line-clamp-1 text-sm font-bold">A. OOXii Data Longlist</p>
+              <button className="shrink-0 text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline" onClick={() => setFieldsModal("longlist")}>
+                Fields ({LONGLIST_CSV_COLUMNS.length})
+              </button>
+            </div>
+            <p className="mt-1 line-clamp-2 text-xs opacity-70">Core operational dataset — no raw transcript text, anonymous IDs only.</p>
+            <PrimaryButton fullWidth className="mt-2 py-2 text-sm" icon={<Download className="h-4 w-4" />} disabled={records.length === 0} onClick={onExportLonglist}>
+              Download Longlist
+            </PrimaryButton>
+          </div>
+
+          <div className="field-card shrink-0">
+            <div className="flex items-center justify-between gap-2">
+              <p className="line-clamp-1 text-sm font-bold">B. Full Audit Longlist</p>
+              <button
+                className="shrink-0 text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline"
+                onClick={() => setFieldsModal("audit")}
+              >
+                Fields
+              </button>
+            </div>
+            <p className="mt-1 line-clamp-2 text-xs opacity-70">Full non-personal audit trail — transcripts, markers, confidence flags, timestamps.</p>
+            <PrimaryButton fullWidth className="mt-2 py-2 text-sm" icon={<Download className="h-4 w-4" />} disabled={records.length === 0} onClick={onExportAudit}>
+              Download Audit Longlist
+            </PrimaryButton>
+          </div>
+        </div>
       </div>
-    </section>
+
+      <DetailModal open={fieldsModal === "longlist"} title={`OOXii Data Longlist fields (${LONGLIST_CSV_COLUMNS.length})`} onClose={() => setFieldsModal(null)}>
+        <FieldChecklist fields={LONGLIST_CSV_COLUMNS} />
+      </DetailModal>
+
+      <DetailModal open={fieldsModal === "audit"} title="Full Audit Longlist fields" onClose={() => setFieldsModal(null)}>
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-field-line bg-field-surface p-3">
+            <p className="flex items-center gap-1.5 text-xs opacity-80">
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+              No names, DOB, phone numbers, addresses, or GPS are collected or exported.
+            </p>
+          </div>
+          {AUDIT_FIELD_GROUPS.map((group) => (
+            <div key={group.title}>
+              <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-field-muted">
+                {group.title} ({group.fields.length})
+              </p>
+              <FieldChecklist fields={group.fields} />
+            </div>
+          ))}
+        </div>
+      </DetailModal>
+    </OneScreenShell>
   );
 }

@@ -88,6 +88,8 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     extraction_safety_status: record.extraction_safety_status ?? "safe",
     fields_reviewed_by_tester: record.fields_reviewed_by_tester ?? false,
     demo_helper_used: record.demo_helper_used ?? false,
+    recording_attempt_number: record.recording_attempt_number ?? 1,
+    rerecord_used: record.rerecord_used ?? false,
     client_snapshot: {
       id: record.client_snapshot?.id ?? "",
       age_band: record.client_snapshot?.age_band ?? "",

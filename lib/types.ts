@@ -177,6 +177,10 @@ export interface TestRecord {
   fields_reviewed_by_tester: boolean;
   /** True when the dev/demo-only "Insert sample transcript for demo" helper (see lib/demoHelpers.ts) was used on this record. Never set by real recording/STT — always forces QC review and is surfaced in the audit export. */
   demo_helper_used: boolean;
+  /** How many recording attempts led to this saved record — starts at 1, +1 per confirmed Rerecord (see app/page.tsx resetRecordingAttempt). The discarded attempt(s) themselves are never stored. */
+  recording_attempt_number: number;
+  /** True if Rerecord was used at least once for this client before this record was saved. */
+  rerecord_used: boolean;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;

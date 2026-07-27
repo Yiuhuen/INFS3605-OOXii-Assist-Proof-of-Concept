@@ -116,6 +116,8 @@ export const AUDIT_CSV_COLUMNS = [
   "extraction_safety_status",
   "fields_reviewed_by_tester",
   "demo_helper_used",
+  "recording_attempt_number",
+  "rerecord_used",
   "created_at",
   "updated_at"
 ] as const;
@@ -167,6 +169,8 @@ function auditRow(record: TestRecord) {
     record.extraction_safety_status,
     record.fields_reviewed_by_tester ? "yes" : "no",
     record.demo_helper_used ? "yes" : "no",
+    record.recording_attempt_number,
+    record.rerecord_used ? "yes" : "no",
     record.created_at,
     record.updated_at
   ];

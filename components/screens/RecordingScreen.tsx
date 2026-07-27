@@ -12,6 +12,7 @@ import {
   Pause,
   PencilLine,
   Play,
+  RotateCcw,
   Square,
   Volume2,
   VolumeX
@@ -28,7 +29,7 @@ import {
   TextAreaField,
   WarningCard
 } from "@/components/ui";
-import { ScreenHeader } from "@/components/ScreenHeader";
+import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
 import { buildClientSpokenPrompt, isSpeechSupported, speakPrompt, stopSpeaking, type SpeechSpeed } from "@/lib/speech";
 import { type TranscriptEngineStatus } from "@/lib/liveTranscript";
 
@@ -37,6 +38,9 @@ import { type TranscriptEngineStatus } from "@/lib/liveTranscript";
  * Visible only when NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG=true is set at build
  * time (e.g. a dedicated QA build), or when the tester has switched on
  * "Show STT diagnostics" under More → Admin tools (adminDiagnosticsEnabled).
+ * Rendered inside its own scrollable disclosure — the one deliberate
+ * exception to this screen's "no scrolling" contract, since it's opt-in only
+ * and never part of the default fitted layout.
  */
 const SHOW_TRANSCRIPT_DEBUG_ENV = process.env.NEXT_PUBLIC_SHOW_TRANSCRIPT_DEBUG === "true";
 
@@ -69,10 +73,9 @@ const INTERACTIVE_SELECTOR = "textarea, input, select, button, a, [role='button'
  *
  * A gesture starting on an interactive child (buttons inside the card,
  * inputs elsewhere) never begins tracking, so it can't hijack a tap or a
- * text-field drag. `touch-action: pan-y` on the card (applied by the caller)
- * lets the browser keep handling vertical scroll natively — this hook only
- * ever reacts to horizontal movement, so a vertical scroll gesture never
- * turns into an accidental prompt change.
+ * text-field drag. The recording screen no longer scrolls vertically at all
+ * (OneScreenShell), so there's no competing vertical gesture to guard
+ * against here anymore — this hook only ever reacts to horizontal movement.
  */
 function useSwipeCard({
   onSwipeLeft,
@@ -176,10 +179,14 @@ function ProgressDots({ total, current }: { total: number; current: number }) {
   );
 }
 
-/** Compact sticky prompt card — step context, the client-facing question, and
- * the tester note, with "Play aloud" and "Why this matters" as small chip
- * buttons rather than a full-height hero card. Stays visible near the top
- * while the tester scrolls through recording controls and the transcript. */
+/**
+ * Compact prompt panel — step context, the client-facing question, and the
+ * tester note, with "Play aloud" and "Why this matters" as small chip
+ * buttons rather than a full-height hero card. Prompt/instruction text is
+ * line-clamped and clamp()-sized so a long clinical sentence still fits the
+ * fixed height budget instead of growing the panel (and the whole screen)
+ * past one viewport.
+ */
 function CompactPromptCard({
   step,
   stepIndex,
@@ -204,6 +211,9 @@ function CompactPromptCard({
   speechAvailable: boolean;
   onPlayToggle: () => void;
 }) {
+  // Resets to closed every time the prompt changes (this component remounts
+  // on `key={step.id}` from the caller below) — "Why this matters" must
+  // never stay open across a swipe/Next and inflate the next card's height.
   const [whyOpen, setWhyOpen] = useState(false);
 
   return (
@@ -215,17 +225,17 @@ function CompactPromptCard({
         <StepBadges stepId={step.id} languageName={languageName} />
       </div>
 
-      <p className="mt-1.5 flex items-center gap-1.5 text-lg font-black leading-snug">
-        {step.icon && <span className="text-base leading-none">{step.icon}</span>}
+      <p className="text-prompt mt-1.5 line-clamp-4 font-black">
+        {step.icon && <span className="mr-1 text-base leading-none">{step.icon}</span>}
         &ldquo;{step.client_prompt}&rdquo;
       </p>
-      {englishGloss && <p className="mt-0.5 text-xs opacity-60">English: &ldquo;{englishGloss}&rdquo;</p>}
+      {englishGloss && <p className="mt-0.5 line-clamp-1 text-xs opacity-60">English: &ldquo;{englishGloss}&rdquo;</p>}
 
-      <p className="mt-1.5 text-xs opacity-80">
+      <p className="mt-1 line-clamp-2 text-xs opacity-80">
         <span className="font-bold opacity-100">Tester instruction:</span> {step.tester_instruction}
       </p>
 
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="chip-button"
@@ -242,8 +252,8 @@ function CompactPromptCard({
           Why this matters
         </button>
       </div>
-      {voiceInfoMessage && <p className="mt-1 text-[11px] opacity-50">{voiceInfoMessage}.</p>}
-      {whyOpen && <p className="mt-2 text-xs leading-relaxed opacity-70">{step.why_this_matters}</p>}
+      {voiceInfoMessage && <p className="mt-1 line-clamp-1 text-[11px] opacity-50">{voiceInfoMessage}.</p>}
+      {whyOpen && <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed opacity-70">{step.why_this_matters}</p>}
     </div>
   );
 }
@@ -332,12 +342,11 @@ function LiveTranscriptPanel({
       : "Unavailable in this browser. Audio is still saved.";
   const [manualOpen, setManualOpen] = useState(false);
 
-  // Compact by design: this panel is a live draft glance, not the archive —
-  // only the most recent lines are shown so the screen never needs its own
-  // internal scrollbar, and never grows past the "core visible" viewport
-  // budget. The full transcript (every segment, in order) is always
-  // available afterwards on Transcript Review.
-  const RECENT_LINE_COUNT = 2;
+  // Compact by design: this strip is a live draft glance, not the archive —
+  // only the single most recent line is shown so it never grows past its
+  // fixed height budget. The full transcript (every segment, in order) is
+  // always available afterwards on Transcript Review.
+  const RECENT_LINE_COUNT = 1;
   const recentSegments = segments.slice(-RECENT_LINE_COUNT);
   const olderSegmentCount = segments.length - recentSegments.length;
 
@@ -362,10 +371,10 @@ function LiveTranscriptPanel({
   }
 
   return (
-    <div className="field-card mt-3 p-3">
-      <div className="flex items-center justify-between">
-        <p className="flex items-center gap-1.5 text-sm font-bold">
-          <span className="relative flex h-2 w-2">
+    <div className="field-card flex h-full min-h-0 flex-col overflow-hidden p-2.5">
+      <div className="flex shrink-0 items-center justify-between">
+        <p className="flex items-center gap-1.5 text-xs font-bold">
+          <span className="relative flex h-2 w-2 shrink-0">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--gold)] opacity-60" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--gold)]" />
           </span>
@@ -375,29 +384,29 @@ function LiveTranscriptPanel({
       </div>
 
       {transcriptUnavailable ? (
-        <div className="mt-2 space-y-2">
+        <div className="mt-1.5 min-h-0 flex-1 space-y-1.5 overflow-hidden">
           <WarningCard>{unavailableMessage}</WarningCard>
           {manualEntryToggleOrField("Type what the client said, since live transcript isn't available.")}
         </div>
       ) : (
-        <div className="ink-panel mt-2 space-y-1.5 p-2.5 text-sm">
+        <div className="ink-panel mt-1.5 min-h-0 flex-1 overflow-hidden p-2 text-sm">
           {olderSegmentCount > 0 && (
-            <p className="text-[11px] opacity-50">
+            <p className="line-clamp-1 text-[11px] opacity-50">
               +{olderSegmentCount} earlier line{olderSegmentCount === 1 ? "" : "s"} — full transcript on the next screen.
             </p>
           )}
           {segments.length === 0 && !interimText && !audioRecordedNoSegments && (
-            <p className="opacity-60">Listening for speech — text will appear here as the client talks.</p>
+            <p className="line-clamp-2 opacity-60">Listening for speech — text will appear here as the client talks.</p>
           )}
           {recentSegments.map((segment) => (
-            <p key={segment.id} className="leading-snug">
+            <p key={segment.id} className="line-clamp-2 leading-snug">
               <span className="mr-1.5 text-[11px] font-bold tabular-nums opacity-50">{formatClock(segment.timestamp)}</span>
               <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-wide opacity-40">{stepTitle(segment.stepId)}</span>
               {segment.text}
             </p>
           ))}
           {interimText && (
-            <p className="italic leading-snug opacity-60">
+            <p className="line-clamp-2 italic leading-snug opacity-60">
               <span className="mr-1.5 text-[11px] font-bold tabular-nums opacity-50">…</span>
               {interimText}
             </p>
@@ -406,13 +415,13 @@ function LiveTranscriptPanel({
       )}
 
       {audioRecordedNoSegments && (
-        <div className="mt-2 space-y-2">
+        <div className="mt-1.5 shrink-0 space-y-1.5">
           <WarningCard>No live transcript captured. Add a manual transcript or send to QC.</WarningCard>
           {manualEntryToggleOrField("Type what the client said, since live transcript wasn't captured.")}
         </div>
       )}
 
-      <p className="mt-1.5 text-[11px] opacity-60">
+      <p className="mt-1 shrink-0 line-clamp-1 text-[11px] opacity-60">
         Draft only — review required.
         {unclearSegments.length > 0 && ` ${unclearSegments.length} unclear — needs QC.`}
       </p>
@@ -483,13 +492,13 @@ function TranscriptDiagnosticsPanel({
     .join(" ");
 
   return (
-    <div className="mt-3">
+    <div>
       <Disclosure label="Admin diagnostic tool">
         <div className="field-card mt-2 space-y-2 p-3">
           <p className="text-sm font-bold">Speech recognition diagnostics</p>
           <p className="text-[11px] opacity-60">Admin/QA only — not part of the normal tester flow. Enabled via More → Admin tools.</p>
           <Disclosure label="Transcript diagnostics">
-        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80">
+        <dl className="grid grid-cols-1 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80 sm:grid-cols-2">
           <dt className="opacity-60">Secure context</dt>
           <dd>{secureContext ? "yes" : "no"}</dd>
           <dt className="opacity-60">Origin</dt>
@@ -544,7 +553,7 @@ function TranscriptDiagnosticsPanel({
             </SecondaryButton>
             <StatusBadge label={sttTestStatus} tone={sttTestStatus === "error" ? "danger" : "neutral"} />
           </div>
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80">
+          <dl className="grid grid-cols-1 gap-x-3 gap-y-1 font-mono text-[11px] opacity-80 sm:grid-cols-2">
             <dt className="opacity-60">Last event fired</dt>
             <dd>{sttTestLastEvent || "none"}</dd>
             <dt className="opacity-60">Result event count</dt>
@@ -560,24 +569,6 @@ function TranscriptDiagnosticsPanel({
         </div>
       </Disclosure>
     </div>
-  );
-}
-
-/** Collapsed-by-default preview of the remaining clinical steps — display only, never reorders or edits the sequence. */
-function NextPrompts({ steps }: { steps: PromptStep[] }) {
-  if (steps.length === 0) return null;
-  return (
-    <Disclosure label={`Upcoming prompts (${steps.length})`}>
-      <ol className="space-y-2">
-        {steps.map((step, index) => (
-          <li key={step.id} className="flex items-start gap-2 rounded-xl border border-field-line bg-field-surface px-3 py-2 text-sm opacity-80">
-            <span className="mt-0.5 text-xs font-bold tabular-nums opacity-50">{index + 2}.</span>
-            {step.icon && <span className="leading-none">{step.icon}</span>}
-            <span className="leading-snug">{step.client_prompt}</span>
-          </li>
-        ))}
-      </ol>
-    </Disclosure>
   );
 }
 
@@ -604,7 +595,7 @@ function ManualEntryFields({
   if (step.id === "right-distance" || step.id === "left-distance") {
     const field = step.id === "right-distance" ? "right_eye_distance_result" : "left_eye_distance_result";
     return (
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         <FormField label="Final readable line" value={line} onChange={(event) => updateDistance(event.target.value, letters, field)} />
         <FormField label="Letters on next line" value={letters} onChange={(event) => updateDistance(line, event.target.value, field)} />
       </div>
@@ -612,7 +603,7 @@ function ManualEntryFields({
   }
   if (step.id === "glasses-check") {
     return (
-      <div className="space-y-4">
+      <div className="space-y-3">
         <FormField
           label="Currently has glasses"
           value={manualFields.current_glasses}
@@ -644,7 +635,6 @@ export function RecordingScreen({
   step,
   stepIndex,
   totalSteps,
-  upcomingSteps,
   languageName,
   languageCode,
   speechSpeed,
@@ -693,6 +683,7 @@ export function RecordingScreen({
   pauseRecording,
   resumeRecording,
   stopRecording,
+  onRerecordRequest,
   onBack,
   onNextPrompt,
   onPreviousPrompt,
@@ -702,7 +693,6 @@ export function RecordingScreen({
   step: PromptStep;
   stepIndex: number;
   totalSteps: number;
-  upcomingSteps: PromptStep[];
   languageName: string;
   languageCode: LanguageCode;
   speechSpeed: SpeechSpeed;
@@ -753,6 +743,8 @@ export function RecordingScreen({
   pauseRecording: () => void;
   resumeRecording: () => void;
   stopRecording: () => void;
+  /** Opens the "Discard this recording and rerecord?" confirmation — only ever wired up to show once recording has stopped (see the button below). */
+  onRerecordRequest: () => void;
   onBack?: () => void;
   /** Swipe left / fallback "Next" / ArrowRight — moves to the next prompt card. Saves a timestamped marker; never affects recording, transcript, or timer. */
   onNextPrompt: () => void;
@@ -891,194 +883,209 @@ export function RecordingScreen({
   }, [attemptNext, attemptPrevious]);
 
   return (
-    <section>
-      <ScreenHeader title="Record conversation" subtitle={clientId} onBack={onBack} isOnline={isOnline} dense />
-
-      <div
-        {...swipeHandlers}
-        style={{ touchAction: "pan-y", transform: `translateX(${dragX}px)`, transition: dragging ? "none" : "transform 200ms ease" }}
-      >
-        <CompactPromptCard
-          // Remounts on every prompt change, so CompactPromptCard's local
-          // "Why this matters" open/closed state always starts fresh —
-          // otherwise it stays open from a previous prompt (React reuses the
-          // same mounted instance across prop changes) and inflates the next
-          // card's height, breaking the compact recording layout.
-          key={step.id}
-          step={step}
-          stepIndex={stepIndex}
-          totalSteps={totalSteps}
-          languageName={languageName}
-          englishGloss={englishGloss}
-          isSpeaking={isSpeaking}
-          isAudioMode={isAudioMode}
-          voiceInfoMessage={voiceInfoMessage}
-          speechAvailable={speechAvailable}
-          onPlayToggle={handlePlayToggle}
-        />
-      </div>
-
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <button type="button" className="chip-button px-2.5" onClick={attemptPrevious} disabled={isFirstStep} aria-label="Previous prompt">
-          <ChevronLeft className="h-3.5 w-3.5" />
-        </button>
-        <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
-          <ProgressDots total={totalSteps} current={stepIndex} />
-          <p className="truncate text-[10px] opacity-50">{edgeMessage ?? "Swipe left / right"}</p>
-        </div>
-        <button type="button" className="chip-button px-2.5" onClick={attemptNext} disabled={isLastStep} aria-label="Next prompt">
-          <ChevronRight className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      {micError && (
-        <div className="mt-2">
-          <WarningCard>Microphone unavailable. Add a manual note to continue.</WarningCard>
-        </div>
-      )}
-
-      <div className="field-card mt-2 p-3">
-        <div className="flex items-center justify-between">
-          <StatusBadge label={recordingLabel} tone={recordingTone} />
-          <span className="text-2xl font-black tabular-nums">{formatElapsed(elapsedSeconds)}</span>
+    <OneScreenShell
+      header={<CompactHeader title="Record" subtitle={clientId} onBack={onBack} isOnline={isOnline} />}
+      footer={
+        <BottomActionBar>
+          <SecondaryButton
+            className="min-h-[2.75rem] shrink-0 whitespace-nowrap px-3.5 py-2.5 text-sm"
+            icon={<AlertTriangle className="h-4 w-4" />}
+            onClick={onMarkUnclear}
+            disabled={!canMarkUnclear}
+          >
+            Mark unclear
+          </SecondaryButton>
+          <PrimaryButton
+            fullWidth
+            className="min-h-[2.75rem] flex-1 py-2.5 text-sm"
+            disabled={!canFinish}
+            icon={<Flag className="h-4 w-4" />}
+            onClick={handleFinish}
+          >
+            Finish &amp; review
+          </PrimaryButton>
+        </BottomActionBar>
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col gap-1.5 overflow-y-auto">
+        {/* 1. Prompt panel — swipe left/right navigates prompts; recording/timer/transcript state is untouched by navigation. */}
+        <div
+          {...swipeHandlers}
+          className="shrink-0"
+          style={{ touchAction: "pan-y", transform: `translateX(${dragX}px)`, transition: dragging ? "none" : "transform 200ms ease" }}
+        >
+          <CompactPromptCard
+            // Remounts on every prompt change so local "Why this matters"
+            // open/closed state always starts fresh.
+            key={step.id}
+            step={step}
+            stepIndex={stepIndex}
+            totalSteps={totalSteps}
+            languageName={languageName}
+            englishGloss={englishGloss}
+            isSpeaking={isSpeaking}
+            isAudioMode={isAudioMode}
+            voiceInfoMessage={voiceInfoMessage}
+            speechAvailable={speechAvailable}
+            onPlayToggle={handlePlayToggle}
+          />
         </div>
 
-        <div className="mt-2.5 flex flex-wrap gap-2">
-          {!recordingEverStarted && (
-            <RecordButton fullWidth className="px-4 py-2.5 text-sm" icon={<Mic className="h-4 w-4" />} onClick={startRecording}>
-              Start recording
-            </RecordButton>
-          )}
-          {recording && !paused && (
-            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Pause className="h-4 w-4" />} onClick={pauseRecording}>
-              Pause
-            </SecondaryButton>
-          )}
-          {recording && paused && (
-            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Play className="h-4 w-4" />} onClick={resumeRecording}>
-              Resume
-            </SecondaryButton>
-          )}
-          {recording && (
-            <SecondaryButton className="px-3.5 py-2 text-sm" icon={<Square className="h-4 w-4" />} onClick={handleStopRecording}>
-              Stop
-            </SecondaryButton>
-          )}
+        <div className="flex shrink-0 items-center justify-between gap-2">
+          <button type="button" className="chip-button px-2.5" onClick={attemptPrevious} disabled={isFirstStep} aria-label="Previous prompt">
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+          <div className="flex min-w-0 flex-1 flex-col items-center gap-0.5">
+            <ProgressDots total={totalSteps} current={stepIndex} />
+            <p className="truncate text-[10px] opacity-50">{edgeMessage ?? "Swipe left / right"}</p>
+          </div>
+          <button type="button" className="chip-button px-2.5" onClick={attemptNext} disabled={isLastStep} aria-label="Next prompt">
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
         </div>
 
-        {/* One compact note max — never stack the nudge, offline, and playback hints together. */}
-        {nudgeVisible ? (
-          <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-[var(--warn)]">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            Start recording before asking the question.
+        {micError && (
+          <div className="shrink-0">
+            <WarningCard>Microphone unavailable. Add a manual note to continue.</WarningCard>
+          </div>
+        )}
+
+        {/* 2. Recording control strip */}
+        <div className="field-card shrink-0 p-2.5">
+          <div className="flex items-center justify-between">
+            <StatusBadge label={recordingLabel} tone={recordingTone} />
+            <span className="text-xl font-black tabular-nums">{formatElapsed(elapsedSeconds)}</span>
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            {!recordingEverStarted && (
+              <RecordButton fullWidth className="px-4 py-2 text-sm" icon={<Mic className="h-4 w-4" />} onClick={startRecording}>
+                Start recording
+              </RecordButton>
+            )}
+            {recording && !paused && (
+              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<Pause className="h-4 w-4" />} onClick={pauseRecording}>
+                Pause
+              </SecondaryButton>
+            )}
+            {recording && paused && (
+              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<Play className="h-4 w-4" />} onClick={resumeRecording}>
+                Resume
+              </SecondaryButton>
+            )}
+            {recording && (
+              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<Square className="h-4 w-4" />} onClick={handleStopRecording}>
+                Stop
+              </SecondaryButton>
+            )}
+            {!recording && recordingStatus === "recorded" && (
+              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<RotateCcw className="h-4 w-4" />} onClick={onRerecordRequest}>
+                Rerecord
+              </SecondaryButton>
+            )}
+          </div>
+
+          {/* One compact note max, fixed one-line height — never stack the nudge, offline, and playback hints together. */}
+          <p className="mt-1.5 line-clamp-1 text-[11px] opacity-60">
+            {nudgeVisible ? (
+              <span className="flex items-center gap-1.5 font-semibold text-[var(--warn)]">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Start recording before asking the question.
+              </span>
+            ) : !isOnline ? (
+              "Works fully offline — processes after sync."
+            ) : recordingStatus === "recorded" && !recording && !micError ? (
+              "Playback available after Finish & review."
+            ) : (
+              " "
+            )}
           </p>
-        ) : !isOnline ? (
-          <p className="mt-2 text-[11px] opacity-60">Works fully offline — processes after sync.</p>
-        ) : (
-          recordingStatus === "recorded" &&
-          !recording &&
-          !micError && <p className="mt-2 text-[11px] opacity-60">Playback available after Finish &amp; review.</p>
+        </div>
+
+        {/* 3. Live transcript strip — absorbs remaining space; internal content is line-clamped so it never needs its own scrollbar. */}
+        {recordingEverStarted && !micError && (
+          <div className="min-h-[5.5rem] flex-1 overflow-hidden">
+            <LiveTranscriptPanel
+              segments={transcriptSegments}
+              interimText={interimText}
+              transcriptUnavailable={transcriptUnavailable}
+              transcriptUnavailableReason={transcriptUnavailableReason}
+              recording={recording}
+              paused={paused}
+              recordingStatus={recordingStatus}
+              engineStatus={transcriptEngineStatus}
+              unclearSegments={unclearSegments}
+              manualTranscriptNote={manualFields.additional_notes}
+              onManualTranscriptNoteChange={(value) => setManualFields({ ...manualFields, additional_notes: value })}
+            />
+          </div>
+        )}
+
+        {/* Admin-only diagnostics — opt-in, scrolls internally, never part of the default fitted layout. */}
+        {(SHOW_TRANSCRIPT_DEBUG_ENV || adminDiagnosticsEnabled) && (
+          <div className="max-h-40 shrink-0 overflow-y-auto">
+            <TranscriptDiagnosticsPanel
+              segments={transcriptSegments}
+              interimText={interimText}
+              engineStatus={transcriptEngineStatus}
+              lastTranscriptError={lastTranscriptError}
+              lastSttEvent={lastSttEvent}
+              sttResultEventCount={sttResultEventCount}
+              speechRecognitionSupported={speechRecognitionSupported}
+              sttConstructorName={sttConstructorName}
+              secureContext={secureContext}
+              pageOrigin={pageOrigin}
+              userAgent={userAgent}
+              micPermissionStatus={micPermissionStatus}
+              currentStepId={step.id}
+              recordingStatus={recordingStatus}
+              sttTestStatus={sttTestStatus}
+              sttTestInterim={sttTestInterim}
+              sttTestFinalText={sttTestFinalText}
+              sttTestError={sttTestError}
+              sttTestLastEvent={sttTestLastEvent}
+              sttTestResultCount={sttTestResultCount}
+              onStartSttOnlyTest={onStartSttOnlyTest}
+              onStopSttOnlyTest={onStopSttOnlyTest}
+              onClearSttOnlyTest={onClearSttOnlyTest}
+            />
+          </div>
+        )}
+
+        {/* "Cannot record?" manual fallback — the one explicit expanded detail
+            area on this screen besides diagnostics: collapsed header takes no
+            extra space, and once opened its fields scroll internally within
+            whatever room is left rather than growing the outer page. */}
+        <div className="shrink-0">
+          <button
+            className="flex w-full items-center justify-between rounded-xl border border-field-line bg-field-card px-3 py-2 text-left text-sm font-semibold"
+            onClick={() => setShowOverrideInput(!showOverrideInput)}
+          >
+            Cannot record?
+            <ChevronDown className={`h-4 w-4 transition ${showOverrideInput ? "rotate-180" : ""}`} />
+          </button>
+        </div>
+        {showOverrideInput && (
+          <div className="shrink-0 space-y-3">
+            <TextAreaField
+              label="Reason recording or transcript is unavailable"
+              value={overrideReason}
+              onChange={(event) => setOverrideReason(event.target.value)}
+              placeholder="e.g. Client declined recording; noisy environment; device microphone broken; live transcript did not capture the answer."
+              rows={2}
+            />
+            <ManualEntryFields step={step} manualFields={manualFields} setManualFields={setManualFields} />
+            <TextAreaField
+              label="Additional notes"
+              value={manualFields.additional_notes}
+              onChange={(event) => setManualFields({ ...manualFields, additional_notes: event.target.value })}
+              placeholder="Optional — prescription/test result notes, lens dispensed, or anything else worth recording manually"
+              rows={2}
+            />
+            <WarningCard>Manual entries without a captured transcript always require QC review before the record can be exported.</WarningCard>
+          </div>
         )}
       </div>
-
-      {recordingEverStarted && !micError && (
-        <LiveTranscriptPanel
-          segments={transcriptSegments}
-          interimText={interimText}
-          transcriptUnavailable={transcriptUnavailable}
-          transcriptUnavailableReason={transcriptUnavailableReason}
-          recording={recording}
-          paused={paused}
-          recordingStatus={recordingStatus}
-          engineStatus={transcriptEngineStatus}
-          unclearSegments={unclearSegments}
-          manualTranscriptNote={manualFields.additional_notes}
-          onManualTranscriptNoteChange={(value) => setManualFields({ ...manualFields, additional_notes: value })}
-        />
-      )}
-
-      {(SHOW_TRANSCRIPT_DEBUG_ENV || adminDiagnosticsEnabled) && (
-        <TranscriptDiagnosticsPanel
-          segments={transcriptSegments}
-          interimText={interimText}
-          engineStatus={transcriptEngineStatus}
-          lastTranscriptError={lastTranscriptError}
-          lastSttEvent={lastSttEvent}
-          sttResultEventCount={sttResultEventCount}
-          speechRecognitionSupported={speechRecognitionSupported}
-          sttConstructorName={sttConstructorName}
-          secureContext={secureContext}
-          pageOrigin={pageOrigin}
-          userAgent={userAgent}
-          micPermissionStatus={micPermissionStatus}
-          currentStepId={step.id}
-          recordingStatus={recordingStatus}
-          sttTestStatus={sttTestStatus}
-          sttTestInterim={sttTestInterim}
-          sttTestFinalText={sttTestFinalText}
-          sttTestError={sttTestError}
-          sttTestLastEvent={sttTestLastEvent}
-          sttTestResultCount={sttTestResultCount}
-          onStartSttOnlyTest={onStartSttOnlyTest}
-          onStopSttOnlyTest={onStopSttOnlyTest}
-          onClearSttOnlyTest={onClearSttOnlyTest}
-        />
-      )}
-
-      <div className="mt-3">
-        <NextPrompts steps={upcomingSteps} />
-      </div>
-
-      <button
-        className="mt-1 flex w-full items-center justify-between rounded-2xl border border-field-line bg-field-card px-3 py-2.5 text-left text-sm font-semibold"
-        onClick={() => setShowOverrideInput(!showOverrideInput)}
-      >
-        Cannot record?
-        <ChevronDown className={`h-4 w-4 transition ${showOverrideInput ? "rotate-180" : ""}`} />
-      </button>
-      {showOverrideInput && (
-        <div className="mt-3 space-y-4">
-          <TextAreaField
-            label="Reason recording or transcript is unavailable"
-            value={overrideReason}
-            onChange={(event) => setOverrideReason(event.target.value)}
-            placeholder="e.g. Client declined recording; noisy environment; device microphone broken; live transcript did not capture the answer."
-            rows={3}
-          />
-          <ManualEntryFields step={step} manualFields={manualFields} setManualFields={setManualFields} />
-          <TextAreaField
-            label="Additional notes"
-            value={manualFields.additional_notes}
-            onChange={(event) => setManualFields({ ...manualFields, additional_notes: event.target.value })}
-            placeholder="Optional — prescription/test result notes, lens dispensed, or anything else worth recording manually"
-            rows={2}
-          />
-          <WarningCard>Manual entries without a captured transcript always require QC review before the record can be exported.</WarningCard>
-        </div>
-      )}
-
-      {/* Spacer so content never sits directly under the sticky action bar. */}
-      <div className="h-4" />
-
-      <div className="sticky-action-bar flex items-center gap-2">
-        <SecondaryButton
-          className="min-h-[2.75rem] px-3.5 py-2.5 text-sm"
-          icon={<AlertTriangle className="h-4 w-4" />}
-          onClick={onMarkUnclear}
-          disabled={!canMarkUnclear}
-        >
-          Mark unclear
-        </SecondaryButton>
-        <PrimaryButton
-          fullWidth
-          className="min-h-[2.75rem] py-2.5 text-sm"
-          disabled={!canFinish}
-          icon={<Flag className="h-4 w-4" />}
-          onClick={handleFinish}
-        >
-          Finish &amp; review transcript
-        </PrimaryButton>
-      </div>
-    </section>
+    </OneScreenShell>
   );
 }

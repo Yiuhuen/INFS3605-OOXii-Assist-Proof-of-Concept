@@ -7,8 +7,9 @@
  * Run: npm run test:extraction
  */
 import { extractFieldsFromTranscript, runFieldExtractionSelfTest } from "../lib/fieldExtraction";
+import { qcReasons } from "../lib/qc";
 import { analyseTranscriptQuality, runTranscriptQualitySelfTest } from "../lib/transcriptQuality";
-import type { ExtractedFieldMap } from "../lib/types";
+import type { ExtractedFieldMap, TestRecord } from "../lib/types";
 
 interface Case {
   name: string;
@@ -46,8 +47,42 @@ cases.push({
       expectEqual("left_eye_distance_result", result.left_eye_distance_result.value, "Line 4") ??
       expectEqual("comfort_response", result.comfort_response.value, "Comfortable") ??
       expectEqual("final_readable_line", result.final_readable_line.value, "Line 4") ??
+      // "already has glasses" is current-glasses evidence ONLY — it must never
+      // leak into glasses_selected, which is the fitting-step outcome field.
+      expectEqual("glasses_selected stays not captured", result.glasses_selected.value, "") ??
+      (result.glasses_selected.requiresReview ? null : "expected glasses_selected (high-risk, not captured) to require review") ??
       (result.right_eye_distance_result.evidence ? null : "expected evidence to be present for right_eye_distance_result") ??
       (result.right_eye_distance_result.value !== result.left_eye_distance_result.value ? null : "right/left eye values must not be identical/swapped")
+    );
+  }
+});
+
+// Phase-4 fixture: current-glasses evidence alone, no selection/dispense
+// language anywhere — glasses_selected must stay Unknown/not captured.
+cases.push({
+  name: "Current-glasses evidence never sets Glasses selected / dispensed",
+  run: () => {
+    const result = extract("The client already has glasses. The right eye can read line five. The left eye can read line four.");
+    return (
+      expectEqual("current_glasses", result.current_glasses.value, "Yes") ??
+      expectEqual("glasses_selected", result.glasses_selected.value, "") ??
+      expectEqual("glasses_selected source", result.glasses_selected.source, "unknown") ??
+      (result.glasses_selected.requiresReview ? null : "expected glasses_selected to require review while not captured")
+    );
+  }
+});
+
+// Phase-4 fixture: an explicit selected-lens statement IS captured — but
+// conservatively, never above medium confidence, always still needing review.
+cases.push({
+  name: "'Glasses selected are plus one point zero zero.' captures +1.00 conservatively",
+  run: () => {
+    const result = extract("Glasses selected are plus one point zero zero.");
+    return (
+      expectEqual("glasses_selected", result.glasses_selected.value, "+1.00") ??
+      (result.glasses_selected.evidence ? null : "expected evidence for glasses_selected") ??
+      (result.glasses_selected.confidence !== "high" ? null : "expected glasses_selected confidence capped below high") ??
+      (result.glasses_selected.requiresReview ? null : "expected glasses_selected to require review (capped confidence)")
     );
   }
 });
@@ -176,16 +211,78 @@ cases.push({
   }
 });
 
-// Manual-edit protection: app/page.tsx editExtractedField() marks a field
-// source "manual" and autoFillFromTranscript() never overwrites a field the
-// tester has already hand-edited (fieldEditedByUser). That gating lives in
-// the page component's closures, not a standalone exported function, so it
-// isn't unit-testable here — it is exercised directly in the Phase 6 manual
-// browser walkthrough (edit a high-risk field, then run Auto-fill again, and
-// confirm the typed value survives unchanged).
+// Phase-9 case C: a tester manually edits glasses_selected from Unknown to
+// "+1.00 reading glasses". The record must (1) carry a QC reason naming the
+// manual high-risk edit, (2) keep the ORIGINAL extraction metadata intact in
+// extracted_json while the edited copy lives in edited_extracted_json — the
+// exact split app/page.tsx editExtractedField() + saveCurrentRecord() produce.
+// (Auto-fill never overwriting an edited field lives in page-component
+// closures and remains exercised by the browser walkthrough.)
 cases.push({
-  name: "Manual edit protection (documented, exercised via browser walkthrough — see comment above)",
-  run: () => null
+  name: "C. Manual edit of high-risk glasses_selected adds a QC reason; original extraction metadata retained",
+  run: () => {
+    const transcript = "The client already has glasses. The right eye can read line five.";
+    const extractedMap = extract(transcript);
+    const extractedJson = {
+      comfort_response: "",
+      cataract_history_confirmed: "",
+      current_glasses: "Yes",
+      right_eye_distance_result: "Line 5",
+      left_eye_distance_result: "",
+      final_readable_line: "",
+      glasses_selected: "",
+      additional_notes: "",
+      missing_fields: [],
+      confidence_score: 0.6,
+      field_confidence: extractedMap
+    };
+    // Mirrors editExtractedField(): edited copy gets the manual value with
+    // source "manual"; the original extracted_json above is left untouched.
+    const editedJson = {
+      ...extractedJson,
+      glasses_selected: "+1.00 reading glasses",
+      field_confidence: {
+        ...extractedMap,
+        glasses_selected: { value: "+1.00 reading glasses", source: "manual" as const, confidence: "high" as const, requiresReview: false }
+      }
+    };
+    const record = {
+      qc_status: "Unreviewed",
+      sync_status: "Local only",
+      recording_status: "recorded",
+      raw_transcript_text: transcript,
+      unclear_segments: [],
+      has_unvisited_prompts: false,
+      has_unrecorded_viewed_prompts: false,
+      demo_helper_used: false,
+      confidence_score: 0.6,
+      missing_fields: [],
+      edited_by_user: true,
+      transcript_quality_flags: [],
+      unresolved_transcript_flag_ids: [],
+      translation_review_required: false,
+      corrections_applied: [],
+      extraction_safety_status: "safe",
+      transcript_quality_risk: "low",
+      extracted_json: extractedJson,
+      edited_extracted_json: editedJson,
+      fields_reviewed_by_tester: false
+    } as unknown as TestRecord;
+
+    const reasons = qcReasons(record);
+    return (
+      (reasons.some((reason) => reason.includes("Manual value entered for high-risk field") && reason.includes("Glasses selected / dispensed"))
+        ? null
+        : `expected a manual high-risk QC reason for glasses_selected, got: ${JSON.stringify(reasons)}`) ??
+      (reasons.some((reason) => reason.includes("Edited by tester")) ? null : "expected 'Edited by tester' QC reason") ??
+      // Original extraction metadata survives separately from the edit:
+      expectEqual("original glasses_selected source retained", record.extracted_json.field_confidence?.glasses_selected?.source, "unknown") ??
+      (record.extracted_json.field_confidence?.current_glasses?.evidence
+        ? null
+        : "expected original current_glasses evidence retained in extracted_json") ??
+      expectEqual("edited copy source", record.edited_extracted_json?.field_confidence?.glasses_selected?.source, "manual")
+    );
+  }
 });
 
 function runSuite(name: string, results: Array<{ name: string; passed: boolean; detail?: string }>): boolean {

@@ -83,6 +83,7 @@
 html {
   min-height: 100%;
   background: var(--bg-ink);
+  overflow-x: hidden;
 }
 
 body {
@@ -91,6 +92,7 @@ body {
   background: var(--bg-ink);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
 }
 
 button,
@@ -112,16 +114,16 @@ textarea:focus-visible {
 @layer components {
   /* Surfaces */
   .field-card {
+    @apply p-4 sm:p-5;
     border-radius: 1.25rem;
     border: 1px solid var(--line);
     background: var(--bg-card);
-    padding: 1.25rem;
   }
 
   .field-card-soft {
+    @apply p-4 sm:p-5;
     border-radius: 1.25rem;
     background: var(--bg-surface);
-    padding: 1.25rem;
   }
 
   .ink-panel {
@@ -259,19 +261,19 @@ textarea:focus-visible {
      recording screen, so it gets its own gold-bordered card that nothing
      else on the page competes with. */
   .prompt-card {
+    @apply p-5 sm:p-6;
     border-radius: 1.5rem;
     border: 2px solid var(--gold);
     background: var(--bg-deep);
-    padding: 1.5rem;
   }
 
   /* Subdued version of .prompt-card for the guided-prompt (preview) screen,
      where the manual entry fields are the primary task, not the prompt. */
   .prompt-card-preview {
+    @apply p-5 sm:p-6;
     border-radius: 1.5rem;
     border: 1px solid var(--line);
     background: var(--bg-card);
-    padding: 1.5rem;
   }
 
   /* Compact sticky prompt card for the recording screen — keeps the active
@@ -279,13 +281,23 @@ textarea:focus-visible {
      controls/live transcript below it, without the height cost of
      .prompt-card's large hero treatment. */
   .prompt-card-compact {
-    position: sticky;
-    top: 0;
-    z-index: 20;
     border-radius: 1rem;
     border: 1px solid var(--gold);
     background: var(--bg-ink);
-    padding: 0.75rem 0.9rem;
+    /* The recording screen is now a fixed one-screen shell (see
+       OneScreenShell) rather than a scrolling page, so this card no longer
+       needs to stick past anything — it's just the first block in the
+       content row. Padding uses clamp() so it shrinks gracefully on short
+       viewports instead of eating into the fixed height budget. */
+    padding: clamp(0.5rem, 2vw, 0.75rem) clamp(0.65rem, 2.5vw, 0.9rem);
+  }
+
+  /* Client-facing prompt text on the recording screen — scales down on short
+     viewports (clamp min) so a long prompt sentence still fits within the
+     card's line-clamp budget instead of forcing the screen to scroll. */
+  .text-prompt {
+    font-size: clamp(0.95rem, 3.6vw, 1.125rem);
+    line-height: 1.3;
   }
 
   /* Small pill button for secondary actions that must not compete with the
@@ -384,5 +396,24 @@ textarea:focus-visible {
     border-color: var(--gold);
     background: var(--gold);
     color: var(--gold-ink);
+  }
+}
+
+/* Compact mode for short phones (e.g. 320×568, 360×640): tighter card
+   padding and slightly smaller prompt text, so the one-screen workflow
+   layouts fit without the content column needing its fallback scroll.
+   Labels/text never drop below readable sizes. */
+@media (max-height: 700px) {
+  .prompt-card-compact {
+    padding: 0.5rem 0.65rem;
+  }
+
+  .text-prompt {
+    font-size: clamp(0.9rem, 3.2vw, 1rem);
+  }
+
+  .field-card,
+  .field-card-soft {
+    padding: 0.65rem 0.75rem;
   }
 }
