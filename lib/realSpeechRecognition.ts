@@ -132,6 +132,18 @@ const FATAL_RECOGNITION_ERRORS = new Set(["not-allowed", "service-not-allowed", 
 const RESTART_DELAY_MS = 250;
 
 /**
+ * A restart attempt can itself throw (the exact InvalidStateError the delay
+ * above exists to avoid can still happen, e.g. under real device/OS
+ * scheduling jitter). Previously a thrown restart was only logged — no
+ * further restart was ever scheduled, so the engine went silently dead with
+ * the UI stuck showing "Reconnecting…" forever. Retrying a bounded number of
+ * times, then surfacing an honest error instead of retrying forever, means
+ * the tester eventually sees "recognition unavailable" rather than a live
+ * transcript that has quietly stopped updating.
+ */
+const MAX_RESTART_ATTEMPTS = 5;
+
+/**
  * Creates a real SpeechRecognition-backed controller. Returns null when the
  * browser has no SpeechRecognition engine at all — callers should check
  * `isSpeechRecognitionSupported()` up front, but `isSupported()` on the
@@ -150,14 +162,40 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
   let active = false;
   let fatalError = false;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
+  let restartAttempts = 0;
 
   function clearRestartTimer() {
     if (restartTimer) clearTimeout(restartTimer);
     restartTimer = null;
   }
 
+  function scheduleRestart() {
+    restartTimer = setTimeout(() => {
+      if (!active || fatalError) return;
+      try {
+        recognition.start();
+        // Success is confirmed by onstart (below), which resets the counter
+        // — a start() call not throwing only means the browser accepted the
+        // request, not that recognition is actually running yet.
+      } catch (err) {
+        debugLog("restart failed", err);
+        restartAttempts += 1;
+        if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
+          debugLog("restart attempts exhausted — giving up", restartAttempts);
+          fatalError = true;
+          active = false;
+          callbacks.onError?.("restart-failed");
+          callbacks.onLifecycleEvent?.("error");
+          return;
+        }
+        scheduleRestart();
+      }
+    }, RESTART_DELAY_MS);
+  }
+
   recognition.onstart = () => {
     debugLog("onstart");
+    restartAttempts = 0;
     callbacks.onStart?.();
     callbacks.onLifecycleEvent?.("start");
   };
@@ -234,14 +272,7 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
     callbacks.onEnd?.();
     callbacks.onLifecycleEvent?.("end");
     if (!active || fatalError) return;
-    restartTimer = setTimeout(() => {
-      if (!active || fatalError) return;
-      try {
-        recognition.start();
-      } catch (err) {
-        debugLog("restart failed", err);
-      }
-    }, RESTART_DELAY_MS);
+    scheduleRestart();
   };
 
   return {
@@ -249,6 +280,7 @@ export function createRealSpeechRecognition(callbacks: RealSpeechRecognitionCall
     start() {
       active = true;
       fatalError = false;
+      restartAttempts = 0;
       try {
         recognition.start();
       } catch (err) {

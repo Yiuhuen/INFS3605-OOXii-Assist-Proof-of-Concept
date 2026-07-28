@@ -4,7 +4,7 @@
  * next step instead of a grid of unrelated tools.
  */
 
-export type WorkflowTargetScreen = "language" | "training" | "client" | "recording" | "transcript" | "fields" | "qc" | "export";
+export type WorkflowTargetScreen = "language" | "training" | "client" | "recording" | "review" | "qc" | "export";
 
 export type WorkflowStepId = "setup" | "client" | "record" | "review" | "save";
 
@@ -25,8 +25,6 @@ export interface WorkflowState {
   trainingComplete: boolean;
   hasActiveClient: boolean;
   recordingStage: "not_started" | "in_progress" | "finished";
-  /** True once the transcript has been reviewed and fields extracted (Transcript Review → Captured Fields). */
-  transcriptReviewed: boolean;
 }
 
 export interface NextAction {
@@ -107,22 +105,14 @@ export function getNextAction(state: WorkflowState): NextAction {
     };
   }
 
-  if (!state.transcriptReviewed) {
-    return {
-      label: "Review transcript",
-      subtitle: "Check the draft transcript before saving the record.",
-      targetScreen: "transcript",
-      urgency: "normal",
-      stepId: "review"
-    };
-  }
-
-  // Recording finished and transcript reviewed, but the client hasn't been
-  // saved yet (extraction has run, tester is on/returning to Captured Fields).
+  // Recording finished but the client hasn't been saved yet — Review test
+  // (the merged transcript+fields review) runs its own extraction the
+  // moment the tester arrives there, so there's no separate "review the
+  // transcript first" step to gate on here anymore.
   return {
-    label: "Review captured fields",
+    label: "Review test",
     subtitle: "Confirm the captured fields before saving.",
-    targetScreen: "fields",
+    targetScreen: "review",
     urgency: "normal",
     stepId: "review"
   };

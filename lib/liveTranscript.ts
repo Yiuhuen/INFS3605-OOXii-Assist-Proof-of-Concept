@@ -110,7 +110,13 @@ export function createBrowserRecognitionController(
     },
     onError: (errorCode) => {
       handlers.onError?.(errorCode);
-      fatalError = errorCode === "not-allowed" || errorCode === "service-not-allowed" || errorCode === "audio-capture";
+      // "restart-failed" (lib/realSpeechRecognition.ts) means the engine
+      // already gave up retrying on its own — same as a permission/hardware
+      // fatal error, this must flip status to "error" immediately rather
+      // than leaving the UI stuck on whatever "restarting" it last reported,
+      // since no further onend will arrive to report anything else.
+      fatalError =
+        errorCode === "not-allowed" || errorCode === "service-not-allowed" || errorCode === "audio-capture" || errorCode === "restart-failed";
       if (fatalError) handlers.onStatusChange?.("error");
     },
     onEnd: () => {

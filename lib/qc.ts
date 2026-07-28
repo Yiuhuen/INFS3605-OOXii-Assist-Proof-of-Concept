@@ -3,6 +3,30 @@ import { HIGH_RISK_EXTRACTED_FIELDS } from "./transcriptQuality";
 import type { ManualExtractedFields, ProcessingStatus, QCStatus, RecordingStatus, SyncStatus, TestRecord, TranscriptQualityRisk } from "./types";
 
 /**
+ * Optional Group C/D fields (astigmatism/toric/axis + the short-sighted
+ * module) — none are in HIGH_RISK_EXTRACTED_FIELDS, so an unmentioned/not-
+ * performed value never forces review on its own. When
+ * lib/fieldExtraction.ts DOES flag one of these fields (astigmatism
+ * mentioned but toric/axis missing, or the short-sighted test performed but
+ * a result missing), it always sets a specific, spec-worded `reason` — this
+ * allowlist is what lets buildCategorizedQcReasons/qcReviewIssues surface
+ * that reason verbatim instead of the generic "draft field requires review"
+ * message every other field falls back to.
+ */
+const OPTIONAL_MODULE_FIELD_KEYS = new Set<string>([
+  "right_astigmatism_present",
+  "right_toric_power",
+  "right_toric_axis",
+  "left_astigmatism_present",
+  "left_toric_power",
+  "left_toric_axis",
+  "short_sighted_test_performed",
+  "short_sighted_right_result",
+  "short_sighted_left_result",
+  "short_sighted_both_eyes_result"
+]);
+
+/**
  * ---------------------------------------------------------------------------
  * Cost-safe future-AI design note
  * ---------------------------------------------------------------------------
@@ -91,7 +115,7 @@ export function evaluateNeedsQc({
   translationReviewRequired?: boolean;
   /** True when the transcript/translation was too uncertain to auto-extract structured fields confidently — see deriveExtractionSafetyStatus. */
   extractionUnsafe?: boolean;
-  /** True when at least one draft-extracted field is flagged requiresReview and the tester has not ticked "Fields reviewed" — see lib/fieldExtraction.ts and the CapturedFieldsScreen confirmation. */
+  /** True when at least one draft-extracted field is flagged requiresReview and the tester has not ticked "Fields reviewed" — see lib/fieldExtraction.ts and the ReviewScreen confirmation. */
   fieldsRequireReviewUnconfirmed?: boolean;
   /** True when the dev/demo-only "Insert sample transcript for demo" helper (lib/demoHelpers.ts) supplied this record's transcript — always forces QC, since it never came from real recording/STT. */
   demoHelperUsed?: boolean;
@@ -337,7 +361,16 @@ function buildCategorizedQcReasons(record: TestRecord): CategorizedQcReason[] {
       if (meta.confidence === "low") {
         reasons.push({ category: "Transcript quality", reason: `Low-confidence extracted field: ${label}` });
       } else if (meta.requiresReview) {
-        genericDraftReviewNeeded = true;
+        // Astigmatism/short-sighted incompleteness always carries its own
+        // spec-worded reason (see lib/fieldExtraction.ts
+        // applyAstigmatismCompleteness/applyShortSightedOptionality) — show
+        // that instead of folding it into the generic message below, so a
+        // reviewer sees exactly which optional-module field is incomplete.
+        if (meta.reason && OPTIONAL_MODULE_FIELD_KEYS.has(key)) {
+          reasons.push({ category: "Missing & edited fields", reason: meta.reason });
+        } else {
+          genericDraftReviewNeeded = true;
+        }
       }
     });
     if (genericDraftReviewNeeded) {
@@ -422,6 +455,30 @@ export function qcReviewIssues(record: TestRecord): QcIssue[] {
     });
   }
 
+  // 1b. Optional Group C/D module incompleteness (astigmatism mentioned but
+  // toric/axis missing, or the short-sighted test performed but a result
+  // missing) — checked separately from block 1 above because these fields
+  // are never "high risk", and separately from the trust-signal loop below
+  // because the value here is genuinely EMPTY (that's the whole issue), not
+  // merely present-but-low-confidence. Never fires for the default "not
+  // mentioned"/"not tested" case — see lib/fieldExtraction.ts
+  // applyAstigmatismCompleteness/applyShortSightedOptionality, which are the
+  // only place these reasons get set.
+  if (fieldConfidenceMap) {
+    OPTIONAL_MODULE_FIELD_KEYS.forEach((key) => {
+      const typedKey = key as keyof ManualExtractedFields;
+      const meta = fieldConfidenceMap[typedKey];
+      if (!meta || !meta.requiresReview || !meta.reason) return;
+      push({
+        severity: "medium",
+        title: `${FIELD_DISPLAY_LABELS[typedKey]} incomplete`,
+        detail: meta.reason,
+        source: "Field",
+        fieldKey: typedKey
+      });
+    });
+  }
+
   // 2. Manual edits (high for high-risk fields, medium otherwise)
   let manualHighRiskCount = 0;
   if (fieldConfidenceMap) {
@@ -463,6 +520,17 @@ export function qcReviewIssues(record: TestRecord): QcIssue[] {
           source: "Field",
           fieldKey: key,
           evidenceText: meta.evidence
+        });
+      } else if (meta.requiresReview && meta.reason && OPTIONAL_MODULE_FIELD_KEYS.has(key)) {
+        // Astigmatism mentioned but toric/axis missing, or the short-sighted
+        // test performed but a result missing — never fires for the default
+        // "not mentioned"/"not tested" case (see OPTIONAL_MODULE_FIELD_KEYS).
+        push({
+          severity: "medium",
+          title: `${FIELD_DISPLAY_LABELS[key]} incomplete`,
+          detail: meta.reason,
+          source: "Field",
+          fieldKey: key
         });
       }
     });
@@ -614,7 +682,10 @@ export function fieldQcReason(record: TestRecord, key: keyof ManualExtractedFiel
   if (isHighRisk && !meta.value.trim()) return `${label} not captured`;
   if (meta.source === "manual" && isHighRisk) return `${label} manually entered — verify before approval`;
   if (meta.confidence === "low") return `Low-confidence extracted field: ${label}`;
-  if (meta.requiresReview) return `Draft field extracted from transcript requires review: ${label}`;
+  if (meta.requiresReview) {
+    if (meta.reason && OPTIONAL_MODULE_FIELD_KEYS.has(key)) return meta.reason;
+    return `Draft field extracted from transcript requires review: ${label}`;
+  }
   return "";
 }
 

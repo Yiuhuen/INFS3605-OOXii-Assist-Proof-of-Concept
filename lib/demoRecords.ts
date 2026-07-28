@@ -1,4 +1,4 @@
-import { REQUIRED_EXTRACTED_FIELDS } from "./types";
+import { NOT_TESTED_FIELD_VALUE, REQUIRED_EXTRACTED_FIELDS } from "./types";
 import type {
   ClientRecord,
   ExtractedFields,
@@ -21,10 +21,10 @@ import type {
  * ---------------------------------------------------------------------------
  * Synthetic demo dataset — never real client data.
  * ---------------------------------------------------------------------------
- * 12 deterministic, fully-synthetic TestRecords used to make Insights/QC/
+ * 13 deterministic, fully-synthetic TestRecords used to make Insights/QC/
  * Export look like a working proof-of-concept instead of an empty shell.
  * Every value here is invented for demonstration: anonymous client IDs only
- * (C-101A..C-112M), no name/DOB/phone/address/GPS anywhere (those fields do
+ * (C-101A..C-113N), no name/DOB/phone/address/GPS anywhere (those fields do
  * not exist on TestRecord/ClientRecord at all — see lib/types.ts). Every
  * record is tagged demo_record: true + demo_dataset_version so it can be
  * safely appended/cleared without ever touching a real tester's saved
@@ -61,7 +61,8 @@ const CREATED_AT = [
   "2026-07-27T10:36:00",
   "2026-07-27T10:48:00",
   "2026-07-27T11:00:00",
-  "2026-07-27T11:12:00"
+  "2026-07-27T11:12:00",
+  "2026-07-27T11:24:00"
 ];
 
 function field(
@@ -75,6 +76,17 @@ function field(
 
 const EMPTY_NOTE = field("", "unknown", "unknown");
 
+/** "Test explicitly not done" (spec Phase 9 Case 4) — mirrors what lib/fieldExtraction.ts's applyShortSightedOptionality would produce from that transcript phrase: performed=No, every sub-field reads NOT_TESTED_FIELD_VALUE with requiresReview false. */
+const SHORT_SIGHTED_NOT_PERFORMED: Pick<
+  ClinicalFields,
+  "short_sighted_test_performed" | "short_sighted_right_result" | "short_sighted_left_result" | "short_sighted_both_eyes_result"
+> = {
+  short_sighted_test_performed: field("No", "corrected_transcript", "high", { evidence: "short-sighted test was not done" }),
+  short_sighted_right_result: field(NOT_TESTED_FIELD_VALUE, "unknown", "high"),
+  short_sighted_left_result: field(NOT_TESTED_FIELD_VALUE, "unknown", "high"),
+  short_sighted_both_eyes_result: field(NOT_TESTED_FIELD_VALUE, "unknown", "high")
+};
+
 interface ClinicalFields {
   current_glasses: FieldConfidence;
   cataract_history_confirmed: FieldConfidence;
@@ -83,6 +95,24 @@ interface ClinicalFields {
   final_readable_line: FieldConfidence;
   comfort_response: FieldConfidence;
   glasses_selected: FieldConfidence;
+  // Optional Group B/C/D fields (right/left lens split, astigmatism/toric/
+  // axis, and the short-sighted module) — all optional, so most of the 12
+  // original records simply omit them; three records below populate them to
+  // exercise the realistic cases from the spec (see the case comments near
+  // C-101A, C-110K, and C-113N).
+  right_lens_selected?: FieldConfidence;
+  left_lens_selected?: FieldConfidence;
+  right_astigmatism_present?: FieldConfidence;
+  right_toric_power?: FieldConfidence;
+  right_toric_axis?: FieldConfidence;
+  left_astigmatism_present?: FieldConfidence;
+  left_toric_power?: FieldConfidence;
+  left_toric_axis?: FieldConfidence;
+  short_sighted_test_performed?: FieldConfidence;
+  short_sighted_right_result?: FieldConfidence;
+  short_sighted_left_result?: FieldConfidence;
+  short_sighted_both_eyes_result?: FieldConfidence;
+  short_sighted_notes?: FieldConfidence;
   additional_notes?: FieldConfidence;
 }
 
@@ -98,6 +128,23 @@ function buildExtracted(fields: ClinicalFields, confidenceScore: number): Extrac
     left_eye_distance_result: get("left_eye_distance_result"),
     final_readable_line: get("final_readable_line"),
     glasses_selected: get("glasses_selected"),
+    // Optional lens/astigmatism/short-sighted module fields — this synthetic
+    // dataset predates that module, so every demo record simply never
+    // captured them. Not in REQUIRED_EXTRACTED_FIELDS, so leaving them blank
+    // never affects missing_fields/confidence_score/QC.
+    right_lens_selected: get("right_lens_selected"),
+    left_lens_selected: get("left_lens_selected"),
+    right_astigmatism_present: get("right_astigmatism_present"),
+    right_toric_power: get("right_toric_power"),
+    right_toric_axis: get("right_toric_axis"),
+    left_astigmatism_present: get("left_astigmatism_present"),
+    left_toric_power: get("left_toric_power"),
+    left_toric_axis: get("left_toric_axis"),
+    short_sighted_test_performed: get("short_sighted_test_performed"),
+    short_sighted_right_result: get("short_sighted_right_result"),
+    short_sighted_left_result: get("short_sighted_left_result"),
+    short_sighted_both_eyes_result: get("short_sighted_both_eyes_result"),
+    short_sighted_notes: get("short_sighted_notes"),
     additional_notes: get("additional_notes"),
     missing_fields,
     confidence_score: confidenceScore,
@@ -388,8 +435,11 @@ const SPECS: RecordSpec[] = [
     rerecordUsed: false,
     recordingAttemptNumber: 1,
     manualOverrideReason: "",
+    // Phase 9 Case 1: standard record, no astigmatism, short-sighted test not
+    // performed (explicitly stated — also demonstrates Case 4: "not tested"
+    // never counts as Missing or triggers QC).
     rawTranscriptText:
-      "The client already has glasses and wears them for reading. She has no history of cataracts. The right eye can read line five. The left eye can read line four. The final readable line she is comfortable with is line four. She feels comfortable overall. We fitted her with plus one point zero zero reading glasses and she says they feel clear.",
+      "The client already has glasses and wears them for reading. She has no history of cataracts. The right eye can read line five. The left eye can read line four. The final readable line she is comfortable with is line four. She feels comfortable overall. We fitted her with plus one point zero zero reading glasses and she says they feel clear. Right lens selected is plus one point zero zero. Left lens selected is plus one point five. No astigmatism. Short-sighted test was not done.",
     fields: {
       current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
       cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
@@ -398,6 +448,11 @@ const SPECS: RecordSpec[] = [
       final_readable_line: field("Line 4", "corrected_transcript", "high", { evidence: "final readable line she is comfortable with is line four" }),
       comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable overall" }),
       glasses_selected: field("+1.00 reading glasses", "corrected_transcript", "medium", { evidence: "fitted her with plus one point zero zero reading glasses", stepId: "glasses-check" }),
+      right_lens_selected: field("+1.00", "corrected_transcript", "medium", { evidence: "right lens selected is plus one point zero zero", stepId: "glasses-check" }),
+      left_lens_selected: field("+1.50", "corrected_transcript", "medium", { evidence: "left lens selected is plus one point five", stepId: "glasses-check" }),
+      right_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "no astigmatism" }),
+      left_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "no astigmatism" }),
+      ...SHORT_SIGHTED_NOT_PERFORMED,
       additional_notes: field("Difficulty reading small writing in evening", "manual", "high")
     },
     confidenceScore: 0.94,
@@ -767,8 +822,11 @@ const SPECS: RecordSpec[] = [
     rerecordUsed: true,
     recordingAttemptNumber: 2,
     manualOverrideReason: "",
+    // Phase 9 Case 2: astigmatism captured for both eyes, toric power + axis
+    // both present, short-sighted not performed — clean, no QC pressure from
+    // the astigmatism module (it's complete).
     rawTranscriptText:
-      "The client already has glasses. No history of cataracts. The right eye can read line six. The left eye can read line five. The final readable line is line five. The client feels comfortable. We fitted plus zero point seven five reading glasses.",
+      "The client already has glasses. No history of cataracts. The right eye can read line six. The left eye can read line five. The final readable line is line five. The client feels comfortable. We fitted plus zero point seven five reading glasses. Right lens selected is plus two point zero zero. Left lens selected is plus two point zero zero. Right eye has astigmatism T2 axis seventy five. Left eye toric one point five axis thirty five.",
     fields: {
       current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
       cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
@@ -776,7 +834,16 @@ const SPECS: RecordSpec[] = [
       left_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "left eye can read line five", stepId: "left-distance" }),
       final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
       comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
-      glasses_selected: field("+0.75 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus zero point seven five reading glasses", stepId: "glasses-check" })
+      glasses_selected: field("+0.75 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus zero point seven five reading glasses", stepId: "glasses-check" }),
+      right_lens_selected: field("+2.00", "corrected_transcript", "medium", { evidence: "right lens selected is plus two point zero zero", stepId: "glasses-check" }),
+      left_lens_selected: field("+2.00", "corrected_transcript", "medium", { evidence: "left lens selected is plus two point zero zero", stepId: "glasses-check" }),
+      right_astigmatism_present: field("Yes", "corrected_transcript", "high", { evidence: "right eye has astigmatism t2 axis seventy five" }),
+      right_toric_power: field("T2", "corrected_transcript", "high", { evidence: "astigmatism t2" }),
+      right_toric_axis: field("75", "corrected_transcript", "high", { evidence: "axis seventy five" }),
+      left_astigmatism_present: field("Yes", "corrected_transcript", "high", { evidence: "left eye toric one point five axis thirty five" }),
+      left_toric_power: field("T1.5", "corrected_transcript", "high", { evidence: "toric one point five" }),
+      left_toric_axis: field("35", "corrected_transcript", "high", { evidence: "axis thirty five" }),
+      ...SHORT_SIGHTED_NOT_PERFORMED
     },
     confidenceScore: 0.88,
     ageBand: "55–64",
@@ -856,6 +923,58 @@ const SPECS: RecordSpec[] = [
     confidenceScore: 0.92,
     ageBand: "25–34",
     gender: "male",
+    qcNotes: ""
+  },
+  // 13 — C-113N: Phase 9 Case 3 — short-sighted test performed, but the left
+  // result was never captured. QC required specifically because the module
+  // was performed and is incomplete (not merely "not tested") — see
+  // lib/qc.ts OPTIONAL_MODULE_FIELD_KEYS / lib/fieldExtraction.ts
+  // applyShortSightedOptionality for the real (non-demo) equivalent logic.
+  {
+    index: 12,
+    clientId: "C-113N",
+    testerLabel: "Tester 02",
+    outreachSession: SESSION_A,
+    deploymentSite: SITE_A,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Unreviewed",
+    hasUnvisitedPrompts: false,
+    hasUnrecordedViewedPrompts: false,
+    editedByUser: false,
+    demoHelperUsed: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    manualOverrideReason: "",
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line five. The left eye can read line four. The final readable line is line four. The client feels comfortable. We fitted plus one point zero zero reading glasses. Short-sighted test performed. Short-sighted right eye line four. Short-sighted both eyes line five.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "right eye can read line five", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 4", "corrected_transcript", "high", { evidence: "left eye can read line four", stepId: "left-distance" }),
+      final_readable_line: field("Line 4", "corrected_transcript", "high", { evidence: "final readable line is line four" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+1.00 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point zero zero reading glasses", stepId: "glasses-check" }),
+      short_sighted_test_performed: field("Yes", "corrected_transcript", "high", { evidence: "short-sighted test performed" }),
+      short_sighted_right_result: field("Line 4", "corrected_transcript", "high", { evidence: "short-sighted right eye line four" }),
+      // Left result never mentioned — QC-required per Case 3, since the
+      // module WAS performed. Mirrors applyShortSightedOptionality's real
+      // output: value stays empty, requiresReview true, with the exact
+      // spec-worded reason lib/qc.ts surfaces verbatim.
+      short_sighted_left_result: field("", "unknown", "unknown", {
+        requiresReview: true,
+        reason: "Short-sighted test performed but left result missing."
+      }),
+      short_sighted_both_eyes_result: field("Line 5", "corrected_transcript", "high", { evidence: "short-sighted both eyes line five" })
+    },
+    confidenceScore: 0.85,
+    ageBand: "35–44",
+    gender: "female",
     qcNotes: ""
   }
 ];

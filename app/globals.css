@@ -458,6 +458,25 @@ textarea:focus-visible {
   }
 }
 
+/* Recording-screen swipe gesture reliability: `touch-action` and
+   `user-select` are NOT inherited by descendants, so setting them only on
+   the swipe wrapper itself (see RecordingScreen.tsx's "swipe-card" div)
+   left inner elements — the prompt text, tester instruction, English gloss,
+   "Play aloud" button — free to fall back to the browser's own default
+   touch handling. On a real device that meant a drag starting on one of
+   those elements could be claimed by native text-selection/callout or
+   panning before ever reaching the pointer handlers, which is exactly why
+   the swipe worked inconsistently depending on where the gesture started.
+   The universal descendant selector closes that gap without touching any
+   element's click/tap behaviour. */
+.swipe-card,
+.swipe-card * {
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* Compact mode for short phones (e.g. 320×568, 360×640): tighter card
    padding and slightly smaller prompt text, so the one-screen workflow
    layouts fit without the content column needing its fallback scroll.

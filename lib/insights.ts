@@ -23,6 +23,19 @@ const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confi
   left_eye_distance_result: "Left eye distance result",
   final_readable_line: "Final readable line",
   glasses_selected: "Glasses selected",
+  right_lens_selected: "Right lens selected",
+  left_lens_selected: "Left lens selected",
+  right_astigmatism_present: "Right astigmatism",
+  right_toric_power: "Right toric / cylinder power",
+  right_toric_axis: "Right astigmatism axis",
+  left_astigmatism_present: "Left astigmatism",
+  left_toric_power: "Left toric / cylinder power",
+  left_toric_axis: "Left astigmatism axis",
+  short_sighted_test_performed: "Short-sighted test performed",
+  short_sighted_right_result: "Short-sighted right eye result",
+  short_sighted_left_result: "Short-sighted left eye result",
+  short_sighted_both_eyes_result: "Short-sighted both eyes result",
+  short_sighted_notes: "Short-sighted notes",
   additional_notes: "Additional notes"
 };
 

@@ -41,7 +41,7 @@ function deriveQcFieldStatus(meta: FieldConfidence | undefined): QcFieldStatus {
   return "Captured";
 }
 
-/** The 7 fields the QC reviewer works through (spec) — additional_notes is free text, never extracted, so it's excluded here same as CapturedFieldsScreen. */
+/** The 7 fields the QC reviewer works through (spec) — additional_notes is free text, never extracted, so it's excluded here same as ReviewScreen. */
 const QC_FIELD_ORDER: Array<keyof ManualExtractedFields> = [
   "current_glasses",
   "cataract_history_confirmed",

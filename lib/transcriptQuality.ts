@@ -2,7 +2,8 @@ import {
   EYE_SIDE_CONFUSION_PHRASES,
   MISRECOGNITION_PAIRS,
   NEGATION_PAIRS,
-  STEP_EXPECTED_TERMS
+  STEP_EXPECTED_TERMS,
+  UNCERTAINTY_PHRASES
 } from "./domainLexicon";
 import {
   type ExtractionSafetyStatus,
@@ -214,6 +215,43 @@ function detectMissingExpectedTermFlags(segments: TranscriptSegment[], rawText: 
   return flags;
 }
 
+/**
+ * Flags hedging/uncertain language ("maybe", "not sure", "I think"…) close
+ * to what the client actually said — spec: mark the nearby field as Check,
+ * never as confidently Captured. Scans per-segment (so the flag's
+ * originalText carries only that segment's own field-identifying words —
+ * "right eye", "glasses", "comfortable", etc — letting the existing
+ * unresolvedFlagAffects check in lib/fieldExtraction.ts scope the review to
+ * the field the hedge actually sat next to) and falls back to the whole raw
+ * transcript when no segments exist yet (e.g. a corrected-transcript-only
+ * pass, or this module's own self-test fixtures below).
+ */
+function detectUncertaintyFlags(segments: TranscriptSegment[], rawText: string): TranscriptQualityFlag[] {
+  const flags: TranscriptQualityFlag[] = [];
+  const sources: Array<{ text: string; segmentId?: string; stepId?: string }> =
+    segments.length > 0
+      ? segments.map((segment) => ({ text: segment.text, segmentId: segment.id, stepId: segment.stepId }))
+      : rawText.trim()
+        ? [{ text: rawText }]
+        : [];
+
+  for (const source of sources) {
+    const lower = source.text.toLowerCase();
+    const matchedPhrase = UNCERTAINTY_PHRASES.find((phrase) => includesPhrase(lower, phrase));
+    if (!matchedPhrase) continue;
+    flags.push({
+      id: generateId("flag"),
+      severity: "warning",
+      type: "uncertain_language",
+      originalText: source.text.trim(),
+      reason: `Uncertain language ("${matchedPhrase}") was used — do not treat this as a confidently confirmed value, verify against the audio.`,
+      segmentId: source.segmentId,
+      stepId: source.stepId
+    });
+  }
+  return flags;
+}
+
 function summariseFlags(flags: TranscriptQualityFlag[], overallRisk: TranscriptQualityReport["overallRisk"]): string {
   if (flags.length === 0) return "No transcript quality concerns detected. This is still a draft transcript — review before relying on it.";
   const critical = flags.filter((flag) => flag.severity === "critical").length;
@@ -239,8 +277,16 @@ export function analyseTranscriptQuality(input: {
   const eyeSideSegmentFlags = detectEyeSideSegmentContradictions(input.segments);
   const lowConfidenceFlags = detectLowConfidenceFlags(input.segments);
   const missingTermFlags = detectMissingExpectedTermFlags(input.segments, input.rawText, input.currentStepId);
+  const uncertaintyFlags = detectUncertaintyFlags(input.segments, input.rawText);
 
-  const flags = [...misrecognitionFlags, ...negationFlags, ...eyeSideSegmentFlags, ...lowConfidenceFlags, ...missingTermFlags];
+  const flags = [
+    ...misrecognitionFlags,
+    ...negationFlags,
+    ...eyeSideSegmentFlags,
+    ...lowConfidenceFlags,
+    ...missingTermFlags,
+    ...uncertaintyFlags
+  ];
   const overallRisk: TranscriptQualityReport["overallRisk"] = flags.some((flag) => flag.severity === "critical")
     ? "high"
     : flags.some((flag) => flag.severity === "warning")
@@ -357,6 +403,31 @@ const SELF_TEST_CASES: SelfTestCase[] = [
     expect: (report) => {
       if (report.flags.some((flag) => flag.type === "ambiguous_negation")) return "expected no ambiguous_negation flag for a lone 'uncomfortable'";
       if (report.flags.some((flag) => flag.suggestedText === "comfortable")) return "expected no auto-suggested change away from 'uncomfortable'";
+      return null;
+    }
+  },
+  {
+    name: "Case 7: uncertain language ('maybe') forces review, not silent confirmation",
+    rawText: "The right eye can maybe read line five.",
+    expect: (report) => {
+      if (!report.flags.some((flag) => flag.type === "uncertain_language")) return "expected uncertain_language flag";
+      if (!report.requiresQc) return "expected requiresQc true";
+      return null;
+    }
+  },
+  {
+    name: "Case 8: 'cannot tell' is recognised as uncertain language",
+    rawText: "The client says they cannot tell which line is clearer.",
+    expect: (report) => {
+      if (!report.flags.some((flag) => flag.type === "uncertain_language")) return "expected uncertain_language flag for 'cannot tell'";
+      return null;
+    }
+  },
+  {
+    name: "Case 9: no hedge words means no uncertain_language flag",
+    rawText: "The right eye can read line five. The left eye can read line four.",
+    expect: (report) => {
+      if (report.flags.some((flag) => flag.type === "uncertain_language")) return "expected no uncertain_language flag for a confident transcript";
       return null;
     }
   }

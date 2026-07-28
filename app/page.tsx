@@ -9,8 +9,7 @@ import { LanguageScreen } from "@/components/screens/LanguageScreen";
 import { TrainingScreen } from "@/components/screens/TrainingScreen";
 import { ClientScreen } from "@/components/screens/ClientScreen";
 import { RecordingScreen } from "@/components/screens/RecordingScreen";
-import { TranscriptScreen } from "@/components/screens/TranscriptScreen";
-import { CapturedFieldsScreen } from "@/components/screens/CapturedFieldsScreen";
+import { ReviewScreen } from "@/components/screens/ReviewScreen";
 import { SavedScreen } from "@/components/screens/SavedScreen";
 import { QcScreen } from "@/components/screens/QcScreen";
 import { ExportScreen } from "@/components/screens/ExportScreen";
@@ -98,8 +97,7 @@ type Screen =
   | "training"
   | "client"
   | "recording"
-  | "transcript"
-  | "fields"
+  | "review"
   | "saved"
   | "qc"
   | "export"
@@ -107,8 +105,8 @@ type Screen =
   | "admin"
   | "settings";
 
-/** The 8 priority workflow screens that get the fixed one-screen shell (OneScreenShell) — see the `<main>` render below. */
-const ONE_SCREEN_WORKFLOW = new Set<Screen>(["dashboard", "client", "recording", "transcript", "fields", "saved", "qc", "export"]);
+/** The 7 priority workflow screens that get the fixed one-screen shell (OneScreenShell) — see the `<main>` render below. */
+const ONE_SCREEN_WORKFLOW = new Set<Screen>(["dashboard", "client", "recording", "review", "saved", "qc", "export"]);
 
 const blankClient = (): ClientRecord => ({
   id: generateClientId(),
@@ -142,6 +140,22 @@ function scoreExtractedFields(fields: ExtractedFields): ExtractedFields {
   return { ...withUnknowns, missing_fields, confidence_score };
 }
 
+/**
+ * SpeechRecognition can genuinely double-fire a final result for the same
+ * utterance (most often right around an engine restart — see
+ * lib/realSpeechRecognition.ts) with no app-level signal that it happened.
+ * A repeat of the exact same final text landing within this window of the
+ * previous one is treated as that double-fire, not two things the client
+ * actually said twice in a row.
+ */
+const DUPLICATE_FINAL_SEGMENT_WINDOW_MS = 4000;
+
+function isDuplicateFinalSegment(lastSegment: TranscriptSegment | undefined, text: string): boolean {
+  if (!lastSegment || !lastSegment.isFinal) return false;
+  if (lastSegment.text.trim().toLowerCase() !== text.trim().toLowerCase()) return false;
+  return Date.now() - new Date(lastSegment.timestamp).getTime() < DUPLICATE_FINAL_SEGMENT_WINDOW_MS;
+}
+
 const MANUAL_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
   "comfort_response",
   "cataract_history_confirmed",
@@ -150,6 +164,19 @@ const MANUAL_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
   "left_eye_distance_result",
   "final_readable_line",
   "glasses_selected",
+  "right_lens_selected",
+  "left_lens_selected",
+  "right_astigmatism_present",
+  "right_toric_power",
+  "right_toric_axis",
+  "left_astigmatism_present",
+  "left_toric_power",
+  "left_toric_axis",
+  "short_sighted_test_performed",
+  "short_sighted_right_result",
+  "short_sighted_left_result",
+  "short_sighted_both_eyes_result",
+  "short_sighted_notes",
   "additional_notes"
 ];
 
@@ -261,7 +288,7 @@ export default function Home() {
   const [correctedTranscript, setCorrectedTranscript] = useState("");
   /** Suggest-only corrections the tester has actually applied to correctedTranscript this session — see lib/transcriptQuality.ts applySuggestedCorrection. Never touches rawTranscript. */
   const [appliedCorrections, setAppliedCorrections] = useState<CorrectionHistoryEntry[]>([]);
-  /** Flag ids the tester dismissed via "Ignore" on the Transcript Review screen — tracked for review-status display only; ignoring never clears requiresQc, since only a human QC reviewer can do that. */
+  /** Flag ids the tester dismissed via "Ignore" on the Review test screen — tracked for review-status display only; ignoring never clears requiresQc, since only a human QC reviewer can do that. */
   const [ignoredFlagIds, setIgnoredFlagIds] = useState<string[]>([]);
   const [transcriptReviewTouched, setTranscriptReviewTouched] = useState(false);
   /** True once the tester has moved on to Captured Fields while the transcript still needed QC — drives the "Sent to QC" review-status label if they navigate back. */
@@ -271,7 +298,7 @@ export default function Home() {
   const [extracted, setExtracted] = useState<ExtractedFields | null>(null);
   const [editedFields, setEditedFields] = useState<ExtractedFields | null>(null);
   const [extractionSource, setExtractionSource] = useState<ExtractionSource>("raw_transcript");
-  /** Which draft fields the tester has manually edited on the Review captured fields screen — "Auto-fill from transcript" (spec §7-§8) must never overwrite these. */
+  /** Which draft fields the tester has manually edited on the Review test screen — "Auto-fill from transcript" (spec §7-§8) must never overwrite these. */
   const [fieldEditedByUser, setFieldEditedByUser] = useState<Partial<Record<keyof ManualExtractedFields, boolean>>>({});
   /** Tester's explicit "Fields reviewed" confirmation (spec §10) — resets whenever a field's value changes so it always reflects the fields currently on screen. */
   const [fieldsReviewedConfirmed, setFieldsReviewedConfirmed] = useState(false);
@@ -292,7 +319,7 @@ export default function Home() {
   const [recordingAttemptNumber, setRecordingAttemptNumber] = useState(1);
   /** True once Rerecord has been used at least once for the current client — frozen into the saved record's rerecord_used field. */
   const [rerecordUsed, setRerecordUsed] = useState(false);
-  /** "Discard this recording and rerecord?" confirmation — shared by RecordingScreen and TranscriptScreen. */
+  /** "Discard this recording and rerecord?" confirmation — shared by RecordingScreen and ReviewScreen. */
   const [rerecordConfirmOpen, setRerecordConfirmOpen] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -595,8 +622,7 @@ export default function Home() {
     languagePackReady: Boolean(tester.preferred_language) && (activePack.downloaded || isOnline),
     trainingComplete: !tester.is_new_tester,
     hasActiveClient: hasDraftClient,
-    recordingStage,
-    transcriptReviewed: extracted !== null
+    recordingStage
   });
 
   function updateTester(next: Tester) {
@@ -680,7 +706,7 @@ export default function Home() {
   }
 
   /**
-   * "Rerecord" (RecordingScreen and TranscriptScreen, after a confirm
+   * "Rerecord" (RecordingScreen and ReviewScreen, after a confirm
    * dialog) — discards only the current recording attempt for the SAME
    * anonymous client. Client identity, language, tester, and site/session
    * context are untouched; nothing has been saved to a TestRecord yet at
@@ -870,29 +896,41 @@ export default function Home() {
     const handlers = {
       onInterim: (text: string) => setInterimText(text),
       onFinal: (text: string, confidence?: number) => {
-        if (!text.trim()) return;
+        const trimmed = text.trim();
+        if (!trimmed) return;
         setInterimText("");
-        setTranscriptSegments((prev) => [
-          ...prev,
-          {
-            id: generateSegmentId(),
-            timestamp: new Date().toISOString(),
-            language,
-            text: text.trim(),
-            isFinal: true,
-            confidence,
-            stepId: currentStepIdRef.current
-          }
-        ]);
+        setTranscriptSegments((prev) => {
+          if (isDuplicateFinalSegment(prev[prev.length - 1], trimmed)) return prev;
+          return [
+            ...prev,
+            {
+              id: generateSegmentId(),
+              timestamp: new Date().toISOString(),
+              language,
+              text: trimmed,
+              isFinal: true,
+              confidence,
+              stepId: currentStepIdRef.current
+            }
+          ];
+        });
       },
       onStatusChange: (status: TranscriptEngineStatus) => setTranscriptEngineStatus(status),
       onError: (errorCode: string) => {
         setLastTranscriptError(errorCode);
         // "no-speech"/"aborted"/"network" are transient — the controller
-        // keeps retrying on its own. Only permission/hardware errors mean
-        // the engine genuinely can't run, so only those flip the UI over to
-        // the honest "unavailable" fallback + manual transcript box.
-        if (errorCode === "not-allowed" || errorCode === "service-not-allowed" || errorCode === "audio-capture") {
+        // keeps retrying on its own. Permission/hardware errors mean the
+        // engine genuinely can't run; "restart-failed" means it tried to
+        // recover on its own and exhausted its retries. Either way the
+        // engine is not coming back on its own, so flip to the honest
+        // "unavailable" fallback + manual transcript box instead of leaving
+        // the tester staring at a transcript that has silently stopped.
+        if (
+          errorCode === "not-allowed" ||
+          errorCode === "service-not-allowed" ||
+          errorCode === "audio-capture" ||
+          errorCode === "restart-failed"
+        ) {
           setTranscriptUnavailable(true);
           setTranscriptUnavailableReason("browser");
         }
@@ -1010,7 +1048,14 @@ export default function Home() {
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        // Label the blob with whatever MIME type the recorder actually used
+        // (browser-dependent — Chrome defaults to audio/webm, Firefox to
+        // audio/ogg) rather than hardcoding "audio/webm". A mislabeled blob
+        // still gets an object URL and a <audio> element that "loads", but
+        // the browser refuses to decode/play content that doesn't match its
+        // declared type, so playback would silently fail on any browser
+        // whose default differs from webm.
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         setAudioBlob(blob);
         if (audioUrl) URL.revokeObjectURL(audioUrl);
         setAudioUrl(URL.createObjectURL(blob));
@@ -1032,10 +1077,17 @@ export default function Home() {
       stopLiveTranscript();
       const timestamp = new Date().toISOString();
       setMicFailureAt(timestamp);
+      // This placeholder marks "a recording attempt happened and failed" for
+      // recordingStatus/nudge purposes below — it is text, not audio, so it
+      // must never get an object URL handed to an <audio> element (that
+      // would render a player that "loads" but can't play anything). Any
+      // previously-recorded real audio URL is revoked here too, since a
+      // fresh mic failure means there is no longer a valid recording for
+      // this attempt.
       const placeholder = new Blob([`Recording unavailable at ${timestamp}. Microphone access failed or was denied.`], { type: "text/plain" });
       setAudioBlob(placeholder);
       if (audioUrl) URL.revokeObjectURL(audioUrl);
-      setAudioUrl(URL.createObjectURL(placeholder));
+      setAudioUrl("");
       setMicError(true);
       setRecording(false);
       setShowOverrideInput(true);
@@ -1102,12 +1154,13 @@ export default function Home() {
   }
 
   /**
-   * Handles "Finish & review transcript": stops continuous recording (if
-   * still running — the tester does not need to tap Stop separately first),
-   * folds any in-flight interim text into a final segment so it isn't lost,
-   * builds raw_transcript_text from the captured segments immediately, mock
-   * translates it, and only then navigates — so Transcript Review always
-   * opens already populated when segments exist.
+   * Handles "Finish & review": stops continuous recording (if still running
+   * — the tester does not need to tap Stop separately first), folds any
+   * in-flight interim text into a final segment so it isn't lost, builds
+   * raw_transcript_text from the captured segments immediately, mock
+   * translates it, and only then navigates to Review test — field
+   * extraction runs separately (see the runExtraction effect below), once
+   * this state update has actually committed.
    */
   function finishRecordingAndReview() {
     intentionalStopRef.current = true;
@@ -1126,7 +1179,10 @@ export default function Home() {
     stopLiveTranscript();
 
     let segmentsForTranscript = transcriptSegments;
-    if (pendingInterim) {
+    // A final result for these same words can have already landed (and been
+    // appended) between the tester tapping "Finish" and this function
+    // reading interimText — folding it in again here would duplicate it.
+    if (pendingInterim && !isDuplicateFinalSegment(transcriptSegments[transcriptSegments.length - 1], pendingInterim)) {
       const pendingSegment: TranscriptSegment = {
         id: generateSegmentId(),
         timestamp: new Date().toISOString(),
@@ -1156,7 +1212,7 @@ export default function Home() {
     setFieldEditedByUser({});
     setFieldsReviewedConfirmed(false);
     setAutoFillSummary(null);
-    setScreen("transcript");
+    setScreen("review");
   }
 
   /**
@@ -1323,11 +1379,23 @@ export default function Home() {
     setFieldSuggestions({});
   }
 
-  function goToCapturedFields() {
-    runExtraction();
-    if (transcriptNeedsQc) setTranscriptSentToQc(true);
-    setScreen("fields");
-  }
+  /**
+   * Review test now shows captured fields immediately on arrival (no
+   * separate "Continue" tap to a second screen), so extraction has to run
+   * as soon as the tester lands there rather than being deferred to a later
+   * navigation action. Firing this from finishRecordingAndReview itself
+   * would read stale correctedTranscript/englishProcessingTranscript state
+   * (those setState calls haven't committed yet in the same tick) — this
+   * effect instead fires once the "review" screen and a cleared `extracted`
+   * have actually rendered together, so runExtraction sees fresh state.
+   */
+  useEffect(() => {
+    if (screen === "review" && !extracted) {
+      runExtraction();
+      if (transcriptNeedsQc) setTranscriptSentToQc(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, extracted]);
 
   /**
    * "Auto-fill from transcript" (spec §8) — re-runs extraction using the
@@ -1465,7 +1533,24 @@ export default function Home() {
       const base = prev ?? extracted;
       if (!base) return prev;
       const next = scoreExtractedFields({ ...base, [key]: value });
-      const manualConfidence: FieldConfidence = { value, source: "manual", confidence: "high", requiresReview: false };
+      const priorMeta = base.field_confidence?.[key];
+      const priorValue = String(base[key] ?? "");
+      // Never invent evidence (spec: "evidenceQuote remains original
+      // evidence if any; if no evidence exists, do not invent evidence") —
+      // but that prior evidence only still describes the field when the
+      // tester's new value MATCHES what was already there (e.g. re-confirming
+      // a captured value through a controlled dropdown). The moment the
+      // value actually changes, the old quote no longer supports the new
+      // answer — carrying it forward would present the transcript as backing
+      // a value it never said, in both the Review screen's "View in
+      // transcript" link and the audit export's evidence_quote column.
+      const manualConfidence: FieldConfidence = {
+        value,
+        source: "manual",
+        confidence: "high",
+        requiresReview: false,
+        evidence: value === priorValue ? priorMeta?.evidence : undefined
+      };
       next.field_confidence = { ...(base.field_confidence ?? {}), [key]: manualConfidence };
       return next;
     });
@@ -1637,7 +1722,7 @@ export default function Home() {
 
   /**
    * A QC-screen field edit is exactly as authoritative as a tester edit on
-   * Review captured fields (spec: "Clinical field edited after transcript
+   * Review test (spec: "Clinical field edited after transcript
    * review") — so it gets the same treatment: source flips to "manual",
    * confidence "high", requiresReview cleared for that field. Without this,
    * field_confidence kept showing the pre-edit transcript evidence/low
@@ -1954,9 +2039,23 @@ export default function Home() {
         />
       )}
 
-      {isAuthenticated && screen === "transcript" && (
-        <TranscriptScreen
+      {isAuthenticated && screen === "review" && extracted && (
+        <ReviewScreen
           clientId={client.id}
+          isOnline={isOnline}
+          onBack={() => setScreen("recording")}
+          onRerecordRequest={requestRerecord}
+          onSave={saveCurrentRecord}
+          extracted={extracted}
+          editedFields={editedFields}
+          onEditField={editExtractedField}
+          extractionSafetyStatus={extractionSafetyStatusPreview}
+          onAutoFill={autoFillFromTranscript}
+          autoFillSummary={autoFillSummary}
+          fieldsReviewedConfirmed={fieldsReviewedConfirmed}
+          onToggleFieldsReviewed={() => setFieldsReviewedConfirmed((value) => !value)}
+          fieldSuggestions={fieldSuggestions}
+          onUseSuggestion={useFieldSuggestion}
           rawTranscript={rawTranscript}
           rawTranscriptLanguageName={languagePacks.find((pack) => pack.code === rawTranscriptLanguage)?.name ?? rawTranscriptLanguage}
           englishProcessingTranscript={englishProcessingTranscript}
@@ -1970,15 +2069,10 @@ export default function Home() {
           unclearSegments={unclearSegments}
           promptMarkers={promptMarkers}
           transcriptSegments={transcriptSegments}
-          language={activePack.code}
           missingPromptLabels={missingPromptSteps.map((step) => step.client_prompt)}
           unrecordedPromptLabels={unrecordedViewedSteps.map((step) => step.client_prompt)}
-          isOnline={isOnline}
           canGenerateDraft={!transcriptCapturedPreview && Boolean(recordingStartedAt) && !micError}
           onGenerateDraft={regenerateTranscriptDraft}
-          onNext={goToCapturedFields}
-          onBack={() => setScreen("recording")}
-          onRerecordRequest={requestRerecord}
           qualityReport={transcriptQualityReport}
           translationReport={translationSafetyReport}
           appliedCorrections={appliedCorrections}
@@ -1990,27 +2084,6 @@ export default function Home() {
           demoHelpersEnabled={DEMO_HELPERS_ENABLED}
           demoHelperUsed={demoHelperUsed}
           onInsertDemoTranscript={insertDemoTranscript}
-        />
-      )}
-
-      {isAuthenticated && screen === "fields" && extracted && (
-        <CapturedFieldsScreen
-          clientId={client.id}
-          extracted={extracted}
-          editedFields={editedFields}
-          isOnline={isOnline}
-          onEditField={editExtractedField}
-          onBackToTranscript={() => setScreen("transcript")}
-          onSave={saveCurrentRecord}
-          extractionSafetyStatus={extractionSafetyStatusPreview}
-          onAutoFill={autoFillFromTranscript}
-          autoFillSummary={autoFillSummary}
-          fieldsReviewedConfirmed={fieldsReviewedConfirmed}
-          onToggleFieldsReviewed={() => setFieldsReviewedConfirmed((value) => !value)}
-          fieldSuggestions={fieldSuggestions}
-          onUseSuggestion={useFieldSuggestion}
-          demoHelperUsed={demoHelperUsed}
-          transcriptText={correctedTranscript || englishProcessingTranscript || rawTranscript}
         />
       )}
 

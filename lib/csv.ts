@@ -1,6 +1,7 @@
+import { AMBIGUOUS_MANUAL_VALUES } from "./fieldExtraction";
 import { LANGUAGE_LABELS } from "./insights";
 import { exportQcStatus, fieldQcReason, qcReasonSummary, recordNeedsQc } from "./qc";
-import { UNKNOWN_FIELD_VALUE } from "./types";
+import { NOT_TESTED_FIELD_VALUE, UNKNOWN_FIELD_VALUE } from "./types";
 import type { FieldConfidence, FieldConfidenceLevel, ManualExtractedFields, SyncStatus, TestRecord } from "./types";
 
 function escapeCsv(value: unknown) {
@@ -65,6 +66,19 @@ export const LONGLIST_CSV_COLUMNS = [
   "final_readable_line",
   "comfort_response",
   "glasses_selected_dispensed",
+  "right_lens_selected",
+  "left_lens_selected",
+  "right_astigmatism_present",
+  "right_toric_power",
+  "right_toric_axis",
+  "left_astigmatism_present",
+  "left_toric_power",
+  "left_toric_axis",
+  "short_sighted_test_performed",
+  "short_sighted_right_result",
+  "short_sighted_left_result",
+  "short_sighted_both_eyes_result",
+  "short_sighted_notes",
   "additional_notes_non_personal",
   "recording_mode",
   "recording_success",
@@ -99,6 +113,19 @@ function longlistRow(record: TestRecord) {
     displayValue(effective.final_readable_line),
     displayValue(effective.comfort_response),
     displayValue(effective.glasses_selected),
+    displayValue(effective.right_lens_selected),
+    displayValue(effective.left_lens_selected),
+    displayValue(effective.right_astigmatism_present),
+    displayValue(effective.right_toric_power),
+    displayValue(effective.right_toric_axis),
+    displayValue(effective.left_astigmatism_present),
+    displayValue(effective.left_toric_power),
+    displayValue(effective.left_toric_axis),
+    displayValue(effective.short_sighted_test_performed),
+    displayValue(effective.short_sighted_right_result),
+    displayValue(effective.short_sighted_left_result),
+    displayValue(effective.short_sighted_both_eyes_result),
+    displayValue(effective.short_sighted_notes),
     effective.additional_notes.trim() || "No additional non-personal notes",
     recordingModeOf(record),
     record.recording_status === "recorded",
@@ -123,7 +150,8 @@ export function recordsToLonglistCsv(records: TestRecord[]) {
 
 /**
  * B. Full Non-Personal Audit Longlist — long/tidy format: one row per
- * (record, field) pair across the 8 manual/draft fields, carrying the
+ * (record, field) pair across the 21 manual/draft fields (see
+ * AUDIT_FIELD_KEYS below), carrying the
  * field-level evidence trail (source, confidence, evidence quote, QC reason,
  * prompt coverage) the OOXii Data Longlist above deliberately omits. Still
  * anonymous-ID only and never includes name, DOB, phone, address, or GPS.
@@ -162,13 +190,26 @@ export const AUDIT_CSV_COLUMNS = [
   "export_ready"
 ] as const;
 
-/** Audit-only translation of the internal FieldConfidence.source enum to the export's plainer vocabulary. */
-const FIELD_SOURCE_LABELS: Record<FieldConfidence["source"], string> = {
-  manual: "manual_transcript",
+/** Audit-only translation of the internal FieldConfidence.source enum to the export's plainer vocabulary. "manual" splits into manual_entry/reviewed_manual_entry — see fieldSourceLabel below. */
+const FIELD_SOURCE_LABELS: Record<Exclude<FieldConfidence["source"], "manual">, string> = {
   transcript: "transcript",
   corrected_transcript: "corrected_transcript",
   unknown: "not_captured"
 };
+
+/**
+ * manual_entry when the field never had transcript evidence behind it (a
+ * Review-screen dropdown/free-text value filled in from nothing);
+ * reviewed_manual_entry when a transcript-derived value was reviewed and
+ * corrected — distinguished by whether FieldConfidence.evidence survived the
+ * edit, which it always does when there was any to carry forward (see
+ * editExtractedField/updateQcRecord in app/page.tsx).
+ */
+function fieldSourceLabel(meta: FieldConfidence | undefined): string {
+  if (!meta) return "not_captured";
+  if (meta.source === "manual") return meta.evidence ? "reviewed_manual_entry" : "manual_entry";
+  return FIELD_SOURCE_LABELS[meta.source];
+}
 
 /** Best-effort numeric translation of the qualitative confidence tier for the audit export's numeric field_confidence column. */
 const CONFIDENCE_NUMERIC: Record<FieldConfidenceLevel, number> = { high: 0.95, medium: 0.75, low: 0.5, unknown: 0 };
@@ -182,6 +223,19 @@ const PROMPT_STEP_LABELS: Record<keyof ManualExtractedFields, string> = {
   final_readable_line: "final_line",
   comfort_response: "comfort",
   glasses_selected: "glasses_selected",
+  right_lens_selected: "right_lens_selected",
+  left_lens_selected: "left_lens_selected",
+  right_astigmatism_present: "right_astigmatism",
+  right_toric_power: "right_toric_power",
+  right_toric_axis: "right_toric_axis",
+  left_astigmatism_present: "left_astigmatism",
+  left_toric_power: "left_toric_power",
+  left_toric_axis: "left_toric_axis",
+  short_sighted_test_performed: "short_sighted_test",
+  short_sighted_right_result: "short_sighted_right",
+  short_sighted_left_result: "short_sighted_left",
+  short_sighted_both_eyes_result: "short_sighted_both_eyes",
+  short_sighted_notes: "short_sighted_notes",
   additional_notes: "additional_notes"
 };
 
@@ -192,9 +246,16 @@ const REAL_PACK_STEP_ID: Partial<Record<keyof ManualExtractedFields, string>> = 
   glasses_selected: "glasses-check"
 };
 
-/** field_status vocabulary per the record-model spec: suggested / reviewed / unknown / needs_review / manual_edit. */
+/** field_status vocabulary per the record-model spec: suggested / reviewed / unknown / needs_review / manual_edit / not_tested. */
 function fieldStatus(record: TestRecord, meta: FieldConfidence | undefined): string {
   if (!meta || !meta.value.trim()) return "unknown";
+  // Optional short-sighted module (spec §8): "Not tested" is a captured,
+  // confident state — never unknown/needs_review, regardless of qc_status.
+  if (meta.value.trim() === NOT_TESTED_FIELD_VALUE) return "not_tested";
+  // Mirrors ReviewScreen.tsx's deriveFieldStatus: "Unclear"/"Client
+  // unsure" always read as needs_review, even once dropdown-selected — the
+  // on-screen status and this export must never disagree.
+  if (AMBIGUOUS_MANUAL_VALUES.has(meta.value.trim())) return "needs_review";
   if (record.qc_status === "Approved") return "reviewed";
   if (meta.source === "manual") return "manual_edit";
   if (meta.requiresReview || meta.confidence === "low") return "needs_review";
@@ -220,6 +281,19 @@ const AUDIT_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
   "final_readable_line",
   "comfort_response",
   "glasses_selected",
+  "right_lens_selected",
+  "left_lens_selected",
+  "right_astigmatism_present",
+  "right_toric_power",
+  "right_toric_axis",
+  "left_astigmatism_present",
+  "left_toric_power",
+  "left_toric_axis",
+  "short_sighted_test_performed",
+  "short_sighted_right_result",
+  "short_sighted_left_result",
+  "short_sighted_both_eyes_result",
+  "short_sighted_notes",
   "additional_notes"
 ];
 
@@ -258,7 +332,7 @@ function auditRowsForRecord(record: TestRecord) {
       ...shared,
       key,
       displayValue(meta?.value ?? ""),
-      meta ? FIELD_SOURCE_LABELS[meta.source] : "not_captured",
+      fieldSourceLabel(meta),
       meta ? CONFIDENCE_NUMERIC[meta.confidence] : 0,
       fieldStatus(record, meta),
       meta?.evidence ?? "",

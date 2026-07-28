@@ -8,7 +8,7 @@ import { tokenizeTranscript } from "@/lib/transcriptHighlight";
  * highlighted (see lib/transcriptHighlight.ts), and — when `focusPhrase` is
  * given — scrolls that specific evidence phrase into view and marks it with
  * a stronger highlight. This is the "click a captured field, jump to its
- * transcript evidence" mechanism used by Review captured fields and QC.
+ * transcript evidence" mechanism used by Review test and QC.
  */
 export function HighlightedTranscript({
   text,

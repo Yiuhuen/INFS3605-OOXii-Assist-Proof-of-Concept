@@ -53,7 +53,27 @@ export interface ExtractedFields {
   right_eye_distance_result: string;
   left_eye_distance_result: string;
   final_readable_line: string;
+  /** Overall glasses-fitting outcome (e.g. "+1.00 reading glasses", "No glasses dispensed") — kept as the single dispensed/selection summary field; right_lens_selected/left_lens_selected below carry the per-eye split. */
   glasses_selected: string;
+  /** Right-eye lens power actually selected/dispensed, e.g. "+1.00" — captured separately from glasses_selected so right/left never blend into one generic value. */
+  right_lens_selected: string;
+  /** Left-eye lens power actually selected/dispensed, e.g. "+1.50". */
+  left_lens_selected: string;
+  /** "Yes" | "No" | "" (not captured) — whether astigmatism was mentioned for the right eye. Optional: absence never implies a clinical finding. */
+  right_astigmatism_present: string;
+  /** Toric/cylinder power for the right eye, e.g. "T2" or "-2.00" — only meaningful once right_astigmatism_present is "Yes". */
+  right_toric_power: string;
+  /** Astigmatism axis (degrees) for the right eye, e.g. "90". */
+  right_toric_axis: string;
+  left_astigmatism_present: string;
+  left_toric_power: string;
+  left_toric_axis: string;
+  /** "Yes" | "No" | "" (never mentioned) — whether the optional short-sighted/distance module was performed at all. See NOT_TESTED_FIELD_VALUE below for how the sub-fields represent "not applicable". */
+  short_sighted_test_performed: string;
+  short_sighted_right_result: string;
+  short_sighted_left_result: string;
+  short_sighted_both_eyes_result: string;
+  short_sighted_notes: string;
   additional_notes: string;
   missing_fields: string[];
   confidence_score: number;
@@ -73,6 +93,28 @@ export const REQUIRED_EXTRACTED_FIELDS: Array<keyof ExtractedFields> = [
 /** Literal value stored for a required/populate field the local extraction (or manual entry) could not determine. Never a guess — see lib/fieldExtraction.ts. */
 export const UNKNOWN_FIELD_VALUE = "UNKNOWN";
 
+/**
+ * Literal value for an optional field that was deliberately not applicable —
+ * currently only the short-sighted/distance module's own fields, when
+ * short_sighted_test_performed isn't "Yes". Distinct from UNKNOWN_FIELD_VALUE:
+ * "Not tested" is never Missing and never forces QC on its own (see
+ * lib/qc.ts, lib/fieldExtraction.ts).
+ */
+export const NOT_TESTED_FIELD_VALUE = "Not tested";
+
+/**
+ * Literal value for short_sighted_test_performed when the transcript is
+ * genuinely ambiguous about whether the optional module was performed — at
+ * least one of its result fields has real transcript evidence, yet nothing
+ * ever explicitly said the test itself was performed. Distinct from both
+ * NOT_TESTED_FIELD_VALUE (confidently not performed / never mentioned at
+ * all, the overwhelming common case) and UNKNOWN_FIELD_VALUE (a required
+ * field with no evidence at all): "Not captured" always requiresReview and
+ * asks the tester to confirm, but never forces the still-empty result fields
+ * to Missing on its own (see lib/fieldExtraction.ts applyShortSightedOptionality).
+ */
+export const NOT_CAPTURED_FIELD_VALUE = "Not captured";
+
 export type ManualExtractedFields = Omit<ExtractedFields, "missing_fields" | "confidence_score" | "field_confidence">;
 
 export function createEmptyManualFields(): ManualExtractedFields {
@@ -84,20 +126,26 @@ export function createEmptyManualFields(): ManualExtractedFields {
     left_eye_distance_result: "",
     final_readable_line: "",
     glasses_selected: "",
+    right_lens_selected: "",
+    left_lens_selected: "",
+    right_astigmatism_present: "",
+    right_toric_power: "",
+    right_toric_axis: "",
+    left_astigmatism_present: "",
+    left_toric_power: "",
+    left_toric_axis: "",
+    short_sighted_test_performed: "",
+    short_sighted_right_result: "",
+    short_sighted_left_result: "",
+    short_sighted_both_eyes_result: "",
+    short_sighted_notes: "",
     additional_notes: ""
   };
 }
 
 export function createEmptyExtractedFields(): ExtractedFields {
   return {
-    comfort_response: "",
-    cataract_history_confirmed: "",
-    current_glasses: "",
-    right_eye_distance_result: "",
-    left_eye_distance_result: "",
-    final_readable_line: "",
-    glasses_selected: "",
-    additional_notes: "",
+    ...createEmptyManualFields(),
     missing_fields: [...REQUIRED_EXTRACTED_FIELDS],
     confidence_score: 0
   };
@@ -175,7 +223,7 @@ export interface TestRecord {
   translation_review_required: boolean;
   /** "draft_review_required" when extracted_json was built from a transcript that was unsafe to auto-extract from confidently. */
   extraction_safety_status: ExtractionSafetyStatus;
-  /** True once the tester has explicitly confirmed "Fields reviewed" on the Review captured fields screen. Draft-extracted fields that still require review keep the record in QC until this is set — see lib/qc.ts evaluateNeedsQc. */
+  /** True once the tester has explicitly confirmed "Fields reviewed" on the Review test screen. Draft-extracted fields that still require review keep the record in QC until this is set — see lib/qc.ts evaluateNeedsQc. */
   fields_reviewed_by_tester: boolean;
   /** True when the dev/demo-only "Insert sample transcript for demo" helper (see lib/demoHelpers.ts) was used on this record. Never set by real recording/STT — always forces QC review and is surfaced in the audit export. */
   demo_helper_used: boolean;
@@ -250,7 +298,7 @@ export interface UnclearSegment {
  */
 
 export type TranscriptQualityRisk = "low" | "medium" | "high";
-/** Transcript Review screen display state — not persisted; derived live from tester interaction. See app/page.tsx. */
+/** Review test screen display state — not persisted; derived live from tester interaction. See app/page.tsx. */
 export type TranscriptReviewStatus = "not_reviewed" | "reviewed_with_corrections" | "reviewed_no_changes" | "sent_to_qc";
 export type FlagSeverity = "info" | "warning" | "critical";
 export type SuggestionConfidence = "low" | "medium" | "high";
@@ -264,7 +312,8 @@ export type TranscriptQualityFlagType =
   | "missing_expected_term"
   | "translation_uncertain"
   | "clinical_contradiction"
-  | "unclear_segment";
+  | "unclear_segment"
+  | "uncertain_language";
 
 export interface TranscriptQualityFlag {
   id: string;

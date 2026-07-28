@@ -17,7 +17,19 @@ import {
   VolumeX
 } from "lucide-react";
 import type { LanguageCode, ManualExtractedFields, PromptStep, RecordingStatus, TranscriptSegment, UnclearSegment } from "@/lib/types";
-import { LIVE_CAPTURED_FIELD_KEYS, LIVE_CAPTURED_FIELD_LABELS, type LiveCapturedFieldMap } from "@/lib/liveCapturedFields";
+import { NOT_CAPTURED_FIELD_VALUE, NOT_TESTED_FIELD_VALUE } from "@/lib/types";
+import {
+  CAPTURED_TAB_LABELS,
+  CORE_FIELD_KEYS,
+  GLASSES_FIELD_KEYS,
+  LIVE_CAPTURED_FIELD_LABELS,
+  SHORT_SIGHTED_FIELD_KEYS,
+  type CapturedTabId,
+  type LiveCapturedFieldKey,
+  type LiveCapturedFieldMap,
+  type LiveFieldPreview,
+  type LiveFieldStatus
+} from "@/lib/liveCapturedFields";
 import {
   Disclosure,
   FormField,
@@ -116,16 +128,18 @@ function useSwipeCard({
     if (disabled) return;
     const target = event.target as HTMLElement;
     if (target.closest(NON_SWIPE_CONTROL_SELECTOR)) return;
+    // Deliberately does NOT call setPointerCapture here. Capturing this early
+    // (before any movement is confirmed) makes the browser retarget every
+    // subsequent event for this pointer — INCLUDING the compatibility
+    // mouseup/click a plain tap fires — away from whatever was actually
+    // tapped (e.g. "Play aloud") and onto this wrapper instead, which has no
+    // click handler at all. That silently ate every tap on an inner button,
+    // swipe or not. Capture is acquired later, in onPointerMove, only once a
+    // real drag is confirmed — by then the tap has already proven itself a
+    // swipe, so redirecting its eventual click (already handled by
+    // suppressNextClickRef) is harmless, while a plain tap never captures at
+    // all and reaches its button normally.
     gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY };
-    // Without pointer capture, a finger that drifts slightly off the card
-    // mid-drag (very easy on a real phone) stops delivering pointermove/up
-    // to this element — the gesture silently dies, which reads as "swipe
-    // doesn't work" even though the handlers are firing correctly.
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Unsupported in this environment — gesture still works, just less robust to drift.
-    }
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -138,6 +152,16 @@ function useSwipeCard({
     // a vertical scroll never nudges the card sideways, and never gets stuck
     // half-dragged since dragX only updates on genuinely horizontal moves.
     if (Math.abs(dx) > Math.abs(dy) * HORIZONTAL_DOMINANCE_RATIO) {
+      // First confirmed-horizontal move of this gesture: capture now, so a
+      // finger that later drifts off the card (very easy on a real phone)
+      // keeps delivering pointermove/up to this element instead of the
+      // gesture silently dying — see the onPointerDown comment for why this
+      // is deferred rather than done immediately on pointerdown.
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Unsupported in this environment — gesture still works, just less robust to drift.
+      }
       setDragging(true);
       setDragX(Math.max(-SWIPE_DRAG_CLAMP_PX, Math.min(SWIPE_DRAG_CLAMP_PX, dx)));
     }
@@ -449,51 +473,122 @@ function LiveTranscriptTab({
   );
 }
 
+const CAPTURED_TAB_ORDER: CapturedTabId[] = ["core", "glasses", "shortSighted"];
+/** "Test performed?" leads the Optional tests tab so the tester sees the gate itself, not just its downstream results — SHORT_SIGHTED_FIELD_KEYS (results + notes only) stays the shared constant other modules key off of. */
+const SHORT_SIGHTED_TAB_FIELD_KEYS: ReadonlyArray<LiveCapturedFieldKey> = ["short_sighted_test_performed", ...SHORT_SIGHTED_FIELD_KEYS];
+const CAPTURED_TAB_FIELD_KEYS: Record<CapturedTabId, ReadonlyArray<LiveCapturedFieldKey>> = {
+  core: CORE_FIELD_KEYS,
+  glasses: GLASSES_FIELD_KEYS,
+  shortSighted: SHORT_SIGHTED_TAB_FIELD_KEYS
+};
+
+function fieldStatusTone(status: LiveFieldStatus): StatusDotTone {
+  if (status === "Captured") return "good";
+  if (status === "Check") return "warn";
+  if (status === "Not tested") return "neutral";
+  return "muted";
+}
+
+/** One field row inside a Captured-so-far tab — same compact dot presentation the panel has always used, just scoped to whichever tab is active. */
+function CapturedFieldRow({
+  fieldKey,
+  field,
+  fallbackStatus = "Missing"
+}: {
+  fieldKey: LiveCapturedFieldKey;
+  field: LiveFieldPreview | undefined;
+  /** What to show before any transcript exists at all (liveFields is null). "Not tested" for the short-sighted module — it's never Missing, with or without a transcript — "Missing" everywhere else. */
+  fallbackStatus?: LiveFieldStatus;
+}) {
+  const status = field?.status ?? fallbackStatus;
+  const label = LIVE_CAPTURED_FIELD_LABELS[fieldKey];
+  const tone = fieldStatusTone(status);
+  const suffix = status === "Missing" ? " · Missing" : status === "Not tested" ? ": Not tested" : `: ${field?.value}${status === "Check" ? " · Check" : ""}`;
+  return (
+    <span className={`status-dot min-w-0 text-[11px] ${tone === "good" ? "is-good" : tone === "warn" ? "is-warn" : "is-muted"}`}>
+      <span className="truncate">
+        {label}
+        {suffix}
+      </span>
+    </span>
+  );
+}
+
 /**
- * Progressive auto-fill glance — all 7 key fields are always listed, each
- * with its live status (Captured / Missing / Check), so the tester can see
- * at a glance what the app still hasn't heard yet instead of only being
- * told about fields that already landed. Updates while recording is still
- * running, from whatever the live transcript (interim + final) has picked
- * up so far — see lib/liveCapturedFields.ts for the extraction pipeline this
- * renders. Rendered as a compact two-column dot grid rather than a
- * scrolling pill strip — no badge wall, values shown only when captured,
- * readable down to 320px. Deliberately draft-only: no evidence blocks, no
- * editing, nothing marked final — that happens on Review captured fields.
+ * Progressive auto-fill glance, now split into three compact tabs — Core,
+ * Glasses (right/left lens split + astigmatism, spec §1-§2), and
+ * Short-sighted (the optional distance module, spec §5-§6) — instead of one
+ * flat list. Each tab gets its own completion count rather than one
+ * misleading global "X of Y" that would otherwise blend fields that differ
+ * by module. Updates while recording is still running, from whatever the
+ * live transcript (interim + final) has picked up so far — see
+ * lib/liveCapturedFields.ts for the extraction pipeline this renders.
+ * Deliberately draft-only: no evidence blocks, no editing, nothing marked
+ * final — that happens on Review test.
+ *
+ * Tabs are TAP-only, not swipeable. The prompt card above already owns a
+ * carefully-tuned horizontal swipe gesture (see useSwipeCard) for
+ * next/previous prompt navigation; layering a second, independent swipe
+ * region a few pixels below it — on a panel dense with selectable text
+ * values — risks the two gestures fighting over the same drag or a
+ * mis-clamped tester swipe silently changing the wrong thing. A compact
+ * three-way segmented control is exactly as fast to use here and keeps the
+ * one swipe gesture on this screen unambiguous.
  */
 function CapturedSoFarPanel({ liveFields }: { liveFields: LiveCapturedFieldMap | null }) {
-  const capturedCount = liveFields ? LIVE_CAPTURED_FIELD_KEYS.filter((key) => liveFields[key].status !== "Missing").length : 0;
+  const [activeTab, setActiveTab] = useState<CapturedTabId>("core");
+  const fieldKeys = CAPTURED_TAB_FIELD_KEYS[activeTab];
+  const capturedCount = fieldKeys.filter((key) => liveFields?.[key]?.status === "Captured" || liveFields?.[key]?.status === "Check").length;
+
+  const shortSightedPerformedField = liveFields?.short_sighted_test_performed;
+  const shortSightedPerformedValue = shortSightedPerformedField?.value ?? NOT_TESTED_FIELD_VALUE;
+  /** Genuinely ambiguous — a result was found in the transcript but nothing ever said the test itself was performed (see lib/fieldExtraction.ts applyShortSightedOptionality). Needs tester confirmation, distinct from the confident "wasn't performed" case below. */
+  const shortSightedAmbiguous = activeTab === "shortSighted" && shortSightedPerformedValue === NOT_CAPTURED_FIELD_VALUE;
+  const shortSightedNotPerformed = activeTab === "shortSighted" && shortSightedPerformedValue !== "Yes" && !shortSightedAmbiguous;
 
   return (
     <div className="shrink-0 rounded-xl border border-field-line bg-field-card px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-bold leading-snug">Captured so far</p>
         <span className="text-[11px] font-semibold opacity-60">
-          {capturedCount} of {LIVE_CAPTURED_FIELD_KEYS.length}
+          {shortSightedAmbiguous ? "Check" : shortSightedNotPerformed ? "Not tested" : `${capturedCount} of ${fieldKeys.length} captured`}
         </span>
       </div>
-      {/* Single column below 360px — at 320px two columns force "Current
-          glasses · Missing" into an ellipsis, and a truncated status is worse
-          in the field than a slightly taller list (the column scrolls). */}
+
+      {/* Compact segmented control — tap only, see the function docblock above for why swipe was deliberately not added here. */}
+      <div className="mt-1.5 grid grid-cols-3 gap-1 rounded-lg bg-black/5 p-0.5 dark:bg-white/5">
+        {CAPTURED_TAB_ORDER.map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`min-h-[1.75rem] rounded-md text-[11px] font-bold transition ${
+              activeTab === tab ? "bg-[var(--gold)] text-black" : "opacity-60 hover:opacity-100"
+            }`}
+            aria-pressed={activeTab === tab}
+          >
+            {CAPTURED_TAB_LABELS[tab]}
+          </button>
+        ))}
+      </div>
+
+      {shortSightedAmbiguous && (
+        <p className="mt-1.5 text-[11px] font-semibold text-[var(--warn)]">Confirm whether this optional test was performed.</p>
+      )}
+      {shortSightedNotPerformed && (
+        <p className="mt-1.5 text-[11px] opacity-60">Short-sighted test was not performed. These fields are not required for this record.</p>
+      )}
+
+      {/* Single column below 360px — at 320px two columns force a status
+          value into an ellipsis, and a truncated status is worse in the
+          field than a slightly taller list (the column scrolls). */}
       <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-0.5 min-[360px]:grid-cols-2">
-        {LIVE_CAPTURED_FIELD_KEYS.map((key, index) => {
-          const field = liveFields?.[key];
-          const status = field?.status ?? "Missing";
-          const label = LIVE_CAPTURED_FIELD_LABELS[key];
-          const tone: StatusDotTone = status === "Captured" ? "good" : status === "Check" ? "warn" : "muted";
-          // The odd 7th row ("Glasses selected", also the longest label) takes
-          // the full width so it never truncates at 360px+ two-column widths.
-          const isLastOdd = index === LIVE_CAPTURED_FIELD_KEYS.length - 1 && LIVE_CAPTURED_FIELD_KEYS.length % 2 === 1;
+        {fieldKeys.map((key, index) => {
+          const isLastOdd = index === fieldKeys.length - 1 && fieldKeys.length % 2 === 1;
           return (
-            <span
-              key={key}
-              className={`status-dot min-w-0 text-[11px] ${isLastOdd ? "min-[360px]:col-span-2" : ""} ${tone === "good" ? "is-good" : tone === "warn" ? "is-warn" : "is-muted"}`}
-            >
-              <span className="truncate">
-                {label}
-                {status === "Missing" ? " · Missing" : `: ${field?.value}${status === "Check" ? " · Check" : ""}`}
-              </span>
-            </span>
+            <div key={key} className={isLastOdd ? "min-[360px]:col-span-2" : ""}>
+              <CapturedFieldRow fieldKey={key} field={liveFields?.[key]} fallbackStatus={activeTab === "shortSighted" ? "Not tested" : "Missing"} />
+            </div>
           );
         })}
       </div>
@@ -1057,11 +1152,12 @@ export function RecordingScreen({
         </BottomActionBar>
       }
     >
-      <div className="flex h-full min-h-0 flex-col gap-1.5 overflow-y-auto">
-        {/* 1. Prompt panel — swipe left/right navigates prompts; recording/timer/transcript state is untouched by navigation. Covers the whole card (prompt text, tester instruction, eye/language badges, why-this-matters, background) — not just a thin inner strip. */}
+      <div className="flex h-full min-h-0 flex-col gap-1.5 overflow-y-auto overflow-x-hidden">
+        {/* 1. Prompt panel — swipe left/right navigates prompts; recording/timer/transcript state is untouched by navigation. Covers the whole card (prompt text, tester instruction, eye/language badges, why-this-matters, background) — not just a thin inner strip.
+            "swipe-card" (see globals.css) is what actually makes the gesture reliable from every inner element — touch-action/user-select don't inherit to descendants, so without it a drag starting on the prompt text or "Play aloud" button could be claimed by the browser's own text-selection/callout/panning instead of reaching these pointer handlers. */}
         <div
           {...swipeHandlers}
-          className="shrink-0 cursor-grab select-none active:cursor-grabbing"
+          className="swipe-card shrink-0 cursor-grab select-none active:cursor-grabbing"
           style={{ touchAction: "pan-y", transform: `translateX(${dragX}px)`, transition: dragging ? "none" : "transform 200ms ease" }}
         >
           <CompactPromptCard

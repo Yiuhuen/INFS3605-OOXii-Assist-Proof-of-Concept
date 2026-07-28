@@ -1,4 +1,5 @@
 import { HIGH_RISK_EXTRACTED_FIELDS } from "./transcriptQuality";
+import { NOT_CAPTURED_FIELD_VALUE, NOT_TESTED_FIELD_VALUE } from "./types";
 import type {
   ExtractedFieldMap,
   ExtractedFieldValue,
@@ -18,7 +19,7 @@ import type {
  * ---------------------------------------------------------------------------
  * Every value this module produces rides alongside source/confidence/
  * evidence/requiresReview metadata (see FieldConfidence in lib/types.ts) so
- * the Review captured fields screen can show *why* a draft was filled, never
+ * the Review test screen can show *why* a draft was filled, never
  * present it as confirmed clinical fact. Nothing here is a guess dressed up
  * as certainty: fields with no transcript evidence stay empty ("") so the
  * existing missing-field/QC pipeline (lib/qc.ts, scoreExtractedFields in
@@ -33,7 +34,7 @@ const RIGHT_STEP_ID = "right-distance";
 const LEFT_STEP_ID = "left-distance";
 const GLASSES_STEP_ID = "glasses-check";
 
-/** Shared display labels for the 8 manual/draft fields — single source of truth for CapturedFieldsScreen and lib/qc.ts, so the two never drift. */
+/** Shared display labels for the manual/draft fields — single source of truth for ReviewScreen and lib/qc.ts, so the two never drift. */
 export const FIELD_DISPLAY_LABELS: Record<keyof ManualExtractedFields, string> = {
   right_eye_distance_result: "Right eye distance result",
   left_eye_distance_result: "Left eye distance result",
@@ -46,10 +47,41 @@ export const FIELD_DISPLAY_LABELS: Record<keyof ManualExtractedFields, string> =
   comfort_response: "Comfort response",
   cataract_history_confirmed: "Cataract history confirmed",
   current_glasses: "Current glasses",
+  right_lens_selected: "Right lens selected",
+  left_lens_selected: "Left lens selected",
+  right_astigmatism_present: "Right astigmatism",
+  right_toric_power: "Right toric / cylinder power",
+  right_toric_axis: "Right astigmatism axis",
+  left_astigmatism_present: "Left astigmatism",
+  left_toric_power: "Left toric / cylinder power",
+  left_toric_axis: "Left astigmatism axis",
+  short_sighted_test_performed: "Short-sighted test performed",
+  short_sighted_right_result: "Short-sighted right eye result",
+  short_sighted_left_result: "Short-sighted left eye result",
+  short_sighted_both_eyes_result: "Short-sighted both eyes result",
+  short_sighted_notes: "Short-sighted notes",
   additional_notes: "Additional notes"
 };
 
+/**
+ * Fields belonging to the optional short-sighted/distance module — never in
+ * HIGH_RISK_EXTRACTED_FIELDS (see lib/transcriptQuality.ts), so an unmentioned
+ * short-sighted test never forces review on its own (spec: never Missing or
+ * QC-required when the module was not performed). Shared with
+ * lib/liveCapturedFields.ts and lib/qc.ts so the three never drift on which
+ * fields belong to this module.
+ */
+export const SHORT_SIGHTED_RESULT_FIELD_KEYS = [
+  "short_sighted_right_result",
+  "short_sighted_left_result",
+  "short_sighted_both_eyes_result",
+  "short_sighted_notes"
+] as const satisfies ReadonlyArray<keyof ManualExtractedFields>;
+
 const HIGH_RISK_SET = new Set<string>(HIGH_RISK_EXTRACTED_FIELDS);
+
+/** Values that always read as "needs review" wherever a field lands on one of them, regardless of source — an explicitly-flagged ambiguous answer (from the Review screen's controlled dropdowns, see components/screens/ReviewScreen.tsx) is never presented as a settled/confirmed value. Shared with lib/csv.ts so the on-screen status and the audit export's field_status never disagree. */
+export const AMBIGUOUS_MANUAL_VALUES = new Set(["Unclear", "Client unsure"]);
 
 const NUMBER_WORDS: Record<string, string> = {
   zero: "0",
@@ -287,7 +319,7 @@ const CATARACT_HISTORY_RULE: PolarityRule = {
 };
 
 const COMFORT_RULE: PolarityRule = {
-  positivePhrases: ["comfortable", "feels comfortable", "okay", "fine", "no discomfort", "not uncomfortable"],
+  positivePhrases: ["comfortable", "feels comfortable", "comfy", "okay", "fine", "no discomfort", "not uncomfortable"],
   negativePhrases: ["uncomfortable", "not comfortable", "dizzy", "headache", "pain", "too strong", "blurry", "not clear"],
   positiveValue: "Comfortable",
   negativeValue: "Uncomfortable"
@@ -553,6 +585,183 @@ function matchGlassesSelected(stepText: string, wholeText: string): FieldMatch {
   return { value: "", matchLevel: "none" };
 }
 
+/**
+ * ---------------------------------------------------------------------------
+ * Right/left lens selected, astigmatism/toric/axis, and the optional
+ * short-sighted/distance module (OOXii-style right/left eye data).
+ * ---------------------------------------------------------------------------
+ * Same "conservative, evidence-only" contract as the rest of this module:
+ * every value still rides through finalizeField below with its own
+ * confidence/requiresReview/evidence. None of these keys are in
+ * HIGH_RISK_EXTRACTED_FIELDS (lib/transcriptQuality.ts), so an unmentioned
+ * astigmatism or short-sighted test never forces review on its own — only the
+ * explicit "mentioned but incomplete" cases below do, via a hand-set reason
+ * lib/qc.ts surfaces directly for these fields.
+ * ---------------------------------------------------------------------------
+ */
+
+const LENS_DIOPTER_CAPTURE = `([+-]|plus|minus)\\s?(\\d+|${DIOPTER_WORD_ALT})(?:\\s*(?:\\.|point)\\s*(\\d+|${DIOPTER_WORD_ALT}))?`;
+
+function buildSidedLensPatterns(side: "right" | "left") {
+  return [
+    // "right lens selected is plus one point zero zero" / "right dispensed lens is plus two point zero zero"
+    new RegExp(`\\b${side}\\b[^.\\n]{0,10}?\\b(?:dispensed\\s+)?lens\\b[^.\\n]{0,15}?\\bis\\b[^.\\n]{0,5}?${LENS_DIOPTER_CAPTURE}`, "i"),
+    // Looser fallback — side and lens mentioned together with a diopter somewhere nearby, no explicit "is".
+    new RegExp(`\\b${side}\\b[^.\\n]{0,25}?\\blens\\b[^.\\n]{0,20}?${LENS_DIOPTER_CAPTURE}`, "i")
+  ];
+}
+
+/** Right/left lens actually selected/dispensed (Group B) — reuses formatDiopter so "+1.00"/"plus one point five" both normalize the same way glasses_selected already does. */
+function matchSidedLensSelected(side: "right" | "left", stepText: string, wholeText: string): FieldMatch {
+  const primaryText = stepText.trim() || wholeText;
+  for (const pattern of buildSidedLensPatterns(side)) {
+    const match = pattern.exec(primaryText) ?? pattern.exec(wholeText);
+    if (match) {
+      return {
+        value: formatDiopter(match[1], match[2], match[3]),
+        matchLevel: stepText.trim() && pattern.test(stepText) ? "step" : "whole",
+        evidence: match[0].trim(),
+        stepId: GLASSES_STEP_ID
+      };
+    }
+  }
+  return { value: "", matchLevel: "none" };
+}
+
+const TENS_WORDS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const ONES_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9 };
+const AXIS_NUM_ALT = `\\d+|(?:${Object.keys(TENS_WORDS).join("|")})(?:\\s+(?:${Object.keys(ONES_WORDS).join("|")}))?|${NUMBER_WORD_ALTERNATION}`;
+const AXIS_PATTERN = new RegExp(`\\baxis\\s*(?:number\\s*)?(${AXIS_NUM_ALT})\\b`, "i");
+
+/** "ninety" -> "90", "thirty five" -> "35" — astigmatism axis values run well past the 0-10 NUMBER_WORDS table the rest of this module uses for line numbers. */
+function parseAxisNumber(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 2 && TENS_WORDS[parts[0]] !== undefined && ONES_WORDS[parts[1]] !== undefined) {
+    return String(TENS_WORDS[parts[0]] + ONES_WORDS[parts[1]]);
+  }
+  if (TENS_WORDS[trimmed] !== undefined) return String(TENS_WORDS[trimmed]);
+  if (ONES_WORDS[trimmed] !== undefined) return String(ONES_WORDS[trimmed]);
+  return NUMBER_WORDS[trimmed] ?? trimmed;
+}
+
+const TORIC_T_PATTERN = /\bT\s?(\d+(?:\.\d+)?)\b/i;
+const WORDED_TORIC_PATTERN = new RegExp(`\\btoric\\s+(${DIOPTER_WORD_ALT}|\\d+)(?:\\s*(?:\\.|point)\\s*(${DIOPTER_WORD_ALT}|\\d+))?\\b`, "i");
+const CYLINDER_KEYWORD_PATTERN = /\bcylinder\b/i;
+const ASTIGMATISM_KEYWORD_PATTERN = /\bastigmatism\b/i;
+const SIDE_QUALIFIED_NO_ASTIGMATISM_PATTERN = /\bno\b[^.\n]{0,15}?\bastigmatism\b/i;
+const GLOBAL_NO_ASTIGMATISM_PATTERN = /\bno\s+astigmatism\b/i;
+
+/** "toric one point five" -> "T1.5", "toric two" -> "T2" — mirrors formatDiopter's word/digit handling but without a sign, prefixed "T". */
+function formatToric(whole: string, decimal?: string): string {
+  const wholeDigits = /^\d+$/.test(whole) ? whole : (NUMBER_WORDS[whole.toLowerCase()] ?? whole);
+  if (!decimal) return `T${wholeDigits}`;
+  const decimalDigits = (/^\d+$/.test(decimal) ? padDecimal(decimal) : padDecimal(NUMBER_WORDS[decimal.toLowerCase()] ?? "0")).replace(/0$/, "") || "0";
+  return `T${wholeDigits}.${decimalDigits}`;
+}
+
+/** Window of text starting at a side keyword ("right"/"left"), scoped to roughly one clause — mirrors sentenceAround's "same breath" intent without requiring a full sentence boundary. */
+function sidedWindow(side: "right" | "left", text: string): string | null {
+  const match = new RegExp(`\\b${side}\\b[^.\\n]{0,80}`, "i").exec(text);
+  return match ? match[0] : null;
+}
+
+interface AstigmatismMatch {
+  present: FieldMatch;
+  power: FieldMatch;
+  axis: FieldMatch;
+}
+
+const emptyFieldMatch: FieldMatch = { value: "", matchLevel: "none" };
+
+/**
+ * Right/left astigmatism present + toric/cylinder power + axis (Group C).
+ * Accepts "toric" or "cylinder" phrasing interchangeably (spec: "Accept
+ * equivalent names if the existing model uses cylinder instead of toric") —
+ * both populate the same right_toric_power/left_toric_power field.
+ */
+function matchAstigmatismForSide(side: "right" | "left", wholeText: string): AstigmatismMatch {
+  const window = sidedWindow(side, wholeText);
+  if (!window) return { present: emptyFieldMatch, power: emptyFieldMatch, axis: emptyFieldMatch };
+
+  const tMatch = TORIC_T_PATTERN.exec(window);
+  const wordedToricMatch = !tMatch ? WORDED_TORIC_PATTERN.exec(window) : null;
+  const cylinderKeywordFound = !tMatch && !wordedToricMatch && CYLINDER_KEYWORD_PATTERN.test(window);
+  const cylinderDiopterMatch = cylinderKeywordFound ? (SIGNED_DIOPTER_PATTERN.exec(window) ?? WORDED_SIGNED_DIOPTER_PATTERN.exec(window)) : null;
+
+  const noAstigmatismMatch = SIDE_QUALIFIED_NO_ASTIGMATISM_PATTERN.exec(window);
+  if (noAstigmatismMatch && !tMatch && !wordedToricMatch && !cylinderDiopterMatch) {
+    return { present: { value: "No", matchLevel: "whole", evidence: noAstigmatismMatch[0].trim() }, power: emptyFieldMatch, axis: emptyFieldMatch };
+  }
+
+  let power: FieldMatch = emptyFieldMatch;
+  if (tMatch) {
+    power = { value: `T${tMatch[1]}`, matchLevel: "whole", evidence: tMatch[0].trim() };
+  } else if (wordedToricMatch) {
+    power = { value: formatToric(wordedToricMatch[1], wordedToricMatch[2]), matchLevel: "whole", evidence: wordedToricMatch[0].trim() };
+  } else if (cylinderDiopterMatch) {
+    power = { value: formatDiopter(cylinderDiopterMatch[1], cylinderDiopterMatch[2], cylinderDiopterMatch[3]), matchLevel: "whole", evidence: cylinderDiopterMatch[0].trim() };
+  }
+
+  const axisMatch = AXIS_PATTERN.exec(window);
+  const axis: FieldMatch = axisMatch ? { value: parseAxisNumber(axisMatch[1]), matchLevel: "whole", evidence: axisMatch[0].trim() } : emptyFieldMatch;
+
+  const astigmatismKeywordMatch = ASTIGMATISM_KEYWORD_PATTERN.exec(window);
+  const hasEvidence = Boolean(astigmatismKeywordMatch) || power.matchLevel !== "none";
+  const present: FieldMatch = hasEvidence
+    ? { value: "Yes", matchLevel: "whole", evidence: (astigmatismKeywordMatch?.[0] ?? power.evidence ?? "").trim() }
+    : emptyFieldMatch;
+
+  return { present, power, axis };
+}
+
+/** "No astigmatism" with no right/left qualifier in the same clause applies to both eyes (spec §5) — side-qualified mentions ("right eye has no astigmatism") are handled per-side by matchAstigmatismForSide above instead. */
+function matchGlobalNoAstigmatism(wholeText: string): FieldMatch {
+  const match = GLOBAL_NO_ASTIGMATISM_PATTERN.exec(wholeText);
+  if (!match) return emptyFieldMatch;
+  const surrounding = sentenceAround(wholeText, match.index);
+  if (/\bright\b/i.test(surrounding) || /\bleft\b/i.test(surrounding)) return emptyFieldMatch;
+  return { value: "No", matchLevel: "whole", evidence: match[0].trim() };
+}
+
+const SHORT_SIGHTED_PERFORMED_RULE: PolarityRule = {
+  positivePhrases: [
+    "short-sighted test performed",
+    "short sighted test performed",
+    "short-sighted test was performed",
+    "short sighted test was performed",
+    "distance test performed",
+    "performed the short-sighted test",
+    "did the short-sighted test"
+  ],
+  negativePhrases: [
+    "short-sighted test was not done",
+    "short sighted test was not done",
+    "did not do the short-sighted test",
+    "did not do the short sighted test",
+    "we did not do the short-sighted test",
+    "we did not do the short sighted test",
+    "short-sighted test not performed",
+    "short sighted test not performed",
+    "did not perform the short-sighted test",
+    "short-sighted test skipped",
+    "no short-sighted test",
+    "short-sighted test not done"
+  ],
+  positiveValue: "Yes",
+  negativeValue: "No"
+};
+
+/** Short-sighted/distance module result matcher — deliberately narrower than the main eye-line matcher (no self-correction/alias handling needed for this optional, low-stakes module). */
+function matchShortSightedResult(kind: "right" | "left" | "both", text: string): FieldMatch {
+  const sidePhrase = kind === "right" ? "right eye" : kind === "left" ? "left eye" : "both eyes";
+  const pattern = new RegExp(`\\bshort[- ]?sighted\\s+${sidePhrase}\\b[^.\\n]{0,20}?\\b${LINE_NUM_GROUP}\\b`, "i");
+  const match = pattern.exec(text);
+  if (match) return { value: `Line ${parseLineNumber(match[1])}`, matchLevel: "whole", evidence: match[0].trim() };
+  return { value: "", matchLevel: "none" };
+}
+
 function unresolvedFlagAffects(quality: TranscriptQualityReport | undefined, predicate: (haystack: string) => boolean): boolean {
   if (!quality) return false;
   return quality.flags.some((flag) => predicate(`${flag.originalText} ${flag.suggestedText ?? ""} ${flag.reason}`.toLowerCase()));
@@ -576,18 +785,17 @@ export function extractFieldsFromTranscript(input: {
   const emptyMatch: FieldMatch = { value: "", matchLevel: "none" };
 
   if (!sourceText.trim()) {
-    const keys: Array<keyof ManualExtractedFields> = [
-      "comfort_response",
-      "cataract_history_confirmed",
-      "current_glasses",
-      "right_eye_distance_result",
-      "left_eye_distance_result",
-      "final_readable_line",
-      "glasses_selected",
-      "additional_notes"
-    ];
+    const keys: Array<keyof ManualExtractedFields> = Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>;
     const empty = {} as ExtractedFieldMap;
-    for (const key of keys) empty[key] = finalizeField(key, emptyMatch, overallRisk, sourceKind);
+    for (const key of keys) {
+      // The short-sighted module is optional and, with no transcript at all,
+      // was never performed — its fields (and the performed flag itself)
+      // read "Not tested", never Missing.
+      const isShortSightedField = key === "short_sighted_test_performed" || (SHORT_SIGHTED_RESULT_FIELD_KEYS as readonly string[]).includes(key);
+      empty[key] = isShortSightedField
+        ? { value: NOT_TESTED_FIELD_VALUE, source: sourceKind, confidence: "high", requiresReview: false }
+        : finalizeField(key, emptyMatch, overallRisk, sourceKind);
+    }
     return empty;
   }
 
@@ -613,6 +821,20 @@ export function extractFieldsFromTranscript(input: {
   const comfortMatch = matchPolarityField(COMFORT_RULE, glassesStepText, lowerWhole);
   const finalLineMatch = matchFinalReadableLine(lowerWhole);
   const glassesSelectedMatch = matchGlassesSelected(glassesStepText, lowerWhole);
+
+  const rightLensMatch = matchSidedLensSelected("right", glassesStepText, lowerWhole);
+  const leftLensMatch = matchSidedLensSelected("left", glassesStepText, lowerWhole);
+
+  const globalNoAstigmatism = matchGlobalNoAstigmatism(lowerWhole);
+  const rightAstigmatism = matchAstigmatismForSide("right", lowerWhole);
+  const leftAstigmatism = matchAstigmatismForSide("left", lowerWhole);
+  const rightAstigmatismPresent = rightAstigmatism.present.matchLevel !== "none" ? rightAstigmatism.present : globalNoAstigmatism;
+  const leftAstigmatismPresent = leftAstigmatism.present.matchLevel !== "none" ? leftAstigmatism.present : globalNoAstigmatism;
+
+  const shortSightedPerformedMatch = matchPolarityField(SHORT_SIGHTED_PERFORMED_RULE, "", lowerWhole);
+  const shortSightedRightMatch = matchShortSightedResult("right", lowerWhole);
+  const shortSightedLeftMatch = matchShortSightedResult("left", lowerWhole);
+  const shortSightedBothMatch = matchShortSightedResult("both", lowerWhole);
 
   // Spec §6: unresolved eye-side / negation / misrecognition flags mark the
   // *affected* field for review even when this module's own rules found a
@@ -664,10 +886,105 @@ export function extractFieldsFromTranscript(input: {
       sourceKind,
       { maxConfidence: "medium" }
     ),
+    right_lens_selected: finalizeField("right_lens_selected", rightLensMatch, overallRisk, sourceKind, { maxConfidence: "medium" }),
+    left_lens_selected: finalizeField("left_lens_selected", leftLensMatch, overallRisk, sourceKind, { maxConfidence: "medium" }),
+    right_astigmatism_present: finalizeField("right_astigmatism_present", rightAstigmatismPresent, overallRisk, sourceKind),
+    right_toric_power: finalizeField("right_toric_power", rightAstigmatism.power, overallRisk, sourceKind),
+    right_toric_axis: finalizeField("right_toric_axis", rightAstigmatism.axis, overallRisk, sourceKind),
+    left_astigmatism_present: finalizeField("left_astigmatism_present", leftAstigmatismPresent, overallRisk, sourceKind),
+    left_toric_power: finalizeField("left_toric_power", leftAstigmatism.power, overallRisk, sourceKind),
+    left_toric_axis: finalizeField("left_toric_axis", leftAstigmatism.axis, overallRisk, sourceKind),
+    short_sighted_test_performed: finalizeField("short_sighted_test_performed", shortSightedPerformedMatch, overallRisk, sourceKind),
+    short_sighted_right_result: finalizeField("short_sighted_right_result", shortSightedRightMatch, overallRisk, sourceKind),
+    short_sighted_left_result: finalizeField("short_sighted_left_result", shortSightedLeftMatch, overallRisk, sourceKind),
+    short_sighted_both_eyes_result: finalizeField("short_sighted_both_eyes_result", shortSightedBothMatch, overallRisk, sourceKind),
+    short_sighted_notes: finalizeField("short_sighted_notes", emptyMatch, overallRisk, sourceKind),
     additional_notes: finalizeField("additional_notes", emptyMatch, overallRisk, sourceKind)
   };
 
+  applyAstigmatismCompleteness(result, "right");
+  applyAstigmatismCompleteness(result, "left");
+  applyShortSightedOptionality(result);
+
   return result;
+}
+
+/**
+ * Spec §7: astigmatism toric power/axis only need review when astigmatism was
+ * actually mentioned for that eye — never when it was simply never brought
+ * up. Runs after finalizeField so it can override the default (non-high-risk)
+ * requiresReview=false with a specific, spec-worded reason lib/qc.ts surfaces
+ * directly (see the field-key allowlist there).
+ */
+function applyAstigmatismCompleteness(result: ExtractedFieldMap, side: "right" | "left") {
+  const presentKey = side === "right" ? "right_astigmatism_present" : "left_astigmatism_present";
+  const powerKey = side === "right" ? "right_toric_power" : "left_toric_power";
+  const axisKey = side === "right" ? "right_toric_axis" : "left_toric_axis";
+  if (result[presentKey].value !== "Yes") return;
+  const sideLabel = side === "right" ? "Right" : "Left";
+  if (!result[powerKey].value.trim()) {
+    result[powerKey] = { ...result[powerKey], requiresReview: true, reason: `${sideLabel} astigmatism mentioned but toric power not captured.` };
+  }
+  if (!result[axisKey].value.trim()) {
+    result[axisKey] = { ...result[axisKey], requiresReview: true, reason: `${sideLabel} astigmatism mentioned but axis not captured.` };
+  }
+}
+
+/**
+ * Spec §4: the short-sighted/distance module is optional. Unless the
+ * transcript says it was actually performed, every result field reads
+ * NOT_TESTED_FIELD_VALUE (never Missing, never requiresReview). Once
+ * performed=Yes, a still-empty result becomes a real Missing value that DOES
+ * require review — matching "Short-sighted test performed but X missing".
+ */
+function applyShortSightedOptionality(result: ExtractedFieldMap) {
+  const performed = result.short_sighted_test_performed.value;
+  // A genuine contradiction: the "performed" phrase itself was never matched
+  // (or was matched negative), yet at least one actual result was found —
+  // e.g. "short-sighted right eye line four" with no "test performed"
+  // sentence anywhere. That's evidence the module DID happen, not evidence
+  // it didn't — never silently reads as the confident "Not tested" case
+  // below, since that would hide a real result from the tester/QC.
+  const hasResultEvidence =
+    performed !== "Yes" &&
+    SHORT_SIGHTED_RESULT_FIELD_KEYS.some((key) => key !== "short_sighted_notes" && result[key].value.trim());
+  if (hasResultEvidence) {
+    result.short_sighted_test_performed = {
+      value: NOT_CAPTURED_FIELD_VALUE,
+      source: result.short_sighted_test_performed.source,
+      // "unknown", not "low" — lib/qc.ts checks confidence === "low" first and
+      // would otherwise surface a generic "Low-confidence extracted field"
+      // reason instead of this field's own spec-worded one (same convention
+      // applyAstigmatismCompleteness above already relies on).
+      confidence: "unknown",
+      requiresReview: true,
+      reason: "Transcript mentions a short-sighted result but the test isn't marked as performed — confirm with the tester."
+    };
+  } else if (!performed.trim()) {
+    // Never mentioned at all — the overwhelming common case, since no clinical
+    // prompt step asks about it. Reads "Not tested", never "Missing"/requires
+    // review (spec §5-§6). An explicit "No" is left as-is: that IS a captured
+    // fact, distinct from "we don't know".
+    result.short_sighted_test_performed = {
+      value: NOT_TESTED_FIELD_VALUE,
+      source: result.short_sighted_test_performed.source,
+      confidence: "high",
+      requiresReview: false
+    };
+  }
+  for (const key of SHORT_SIGHTED_RESULT_FIELD_KEYS) {
+    if (performed !== "Yes") {
+      if (!result[key].value.trim()) {
+        result[key] = { value: NOT_TESTED_FIELD_VALUE, source: result[key].source, confidence: "high", requiresReview: false };
+      }
+      continue;
+    }
+    if (key === "short_sighted_notes") continue; // free-text — never required even once the module was performed.
+    if (!result[key].value.trim()) {
+      const label = key === "short_sighted_right_result" ? "right" : key === "short_sighted_left_result" ? "left" : "both eyes";
+      result[key] = { ...result[key], requiresReview: true, reason: `Short-sighted test performed but ${label} result missing.` };
+    }
+  }
 }
 
 interface SelfTestCase {
@@ -842,6 +1159,151 @@ const SELF_TEST_CASES: SelfTestCase[] = [
     expect: (result) => {
       if (!result.right_eye_distance_result.requiresReview) return "expected right eye requiresReview true for misheard alias";
       if (result.right_eye_distance_result.confidence === "high") return "expected right eye confidence not high for misheard alias";
+      return null;
+    }
+  },
+  {
+    name: "Right/left lens selected captured independently",
+    input: {
+      rawTranscriptText: "Right lens selected is plus one point zero zero. Left lens selected is plus one point five.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.right_lens_selected.value !== "+1.00") return `expected right_lens_selected +1.00, got ${result.right_lens_selected.value}`;
+      if (result.left_lens_selected.value !== "+1.50") return `expected left_lens_selected +1.50, got ${result.left_lens_selected.value}`;
+      return null;
+    }
+  },
+  {
+    name: "Astigmatism/toric/axis captured per eye, T-notation and worded toric",
+    input: {
+      rawTranscriptText: "Right eye has astigmatism T2 axis ninety. Left eye toric one point five axis thirty five.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.right_astigmatism_present.value !== "Yes") return `expected right_astigmatism_present Yes, got ${result.right_astigmatism_present.value}`;
+      if (result.right_toric_power.value !== "T2") return `expected right_toric_power T2, got ${result.right_toric_power.value}`;
+      if (result.right_toric_axis.value !== "90") return `expected right_toric_axis 90, got ${result.right_toric_axis.value}`;
+      if (result.left_astigmatism_present.value !== "Yes") return `expected left_astigmatism_present Yes, got ${result.left_astigmatism_present.value}`;
+      if (result.left_toric_power.value !== "T1.5") return `expected left_toric_power T1.5, got ${result.left_toric_power.value}`;
+      if (result.left_toric_axis.value !== "35") return `expected left_toric_axis 35, got ${result.left_toric_axis.value}`;
+      return null;
+    }
+  },
+  {
+    name: "Cylinder phrasing is accepted as an astigmatism/toric equivalent",
+    input: {
+      rawTranscriptText: "Right cylinder minus two axis ninety.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.right_astigmatism_present.value !== "Yes") return `expected right_astigmatism_present Yes, got ${result.right_astigmatism_present.value}`;
+      if (result.right_toric_power.value !== "-2.00") return `expected right_toric_power -2.00, got ${result.right_toric_power.value}`;
+      if (result.right_toric_axis.value !== "90") return `expected right_toric_axis 90, got ${result.right_toric_axis.value}`;
+      return null;
+    }
+  },
+  {
+    name: "Unqualified 'No astigmatism' applies to both eyes",
+    input: {
+      rawTranscriptText: "The client already has glasses. No astigmatism.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.right_astigmatism_present.value !== "No") return `expected right_astigmatism_present No, got ${result.right_astigmatism_present.value}`;
+      if (result.left_astigmatism_present.value !== "No") return `expected left_astigmatism_present No, got ${result.left_astigmatism_present.value}`;
+      return null;
+    }
+  },
+  {
+    name: "Short-sighted test not done — fields read Not tested, never requiresReview",
+    input: {
+      rawTranscriptText: "Short-sighted test was not done.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.short_sighted_test_performed.value !== "No") return `expected short_sighted_test_performed No, got ${result.short_sighted_test_performed.value}`;
+      for (const key of SHORT_SIGHTED_RESULT_FIELD_KEYS) {
+        if (result[key].value !== NOT_TESTED_FIELD_VALUE) return `expected ${key} to read "${NOT_TESTED_FIELD_VALUE}", got ${result[key].value}`;
+        if (result[key].requiresReview) return `expected ${key}.requiresReview false when the module was not performed`;
+      }
+      return null;
+    }
+  },
+  {
+    name: "Short-sighted test performed with an incomplete result requires review only for the missing side",
+    input: {
+      rawTranscriptText: "Short-sighted test performed. Short-sighted right eye line four. Short-sighted both eyes line five.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.short_sighted_test_performed.value !== "Yes") return `expected short_sighted_test_performed Yes, got ${result.short_sighted_test_performed.value}`;
+      if (result.short_sighted_right_result.value !== "Line 4") return `expected short_sighted_right_result Line 4, got ${result.short_sighted_right_result.value}`;
+      if (result.short_sighted_both_eyes_result.value !== "Line 5") return `expected short_sighted_both_eyes_result Line 5, got ${result.short_sighted_both_eyes_result.value}`;
+      if (result.short_sighted_left_result.value.trim()) return `expected short_sighted_left_result to stay Missing, got ${result.short_sighted_left_result.value}`;
+      if (!result.short_sighted_left_result.requiresReview) return "expected short_sighted_left_result.requiresReview true once the module was performed but this side is missing";
+      return null;
+    }
+  },
+  {
+    name: "Short-sighted notes stay Optional (never requiresReview) even once the module was performed",
+    input: {
+      rawTranscriptText: "Short-sighted test performed. Short-sighted right eye line four. Short-sighted left eye line four. Short-sighted both eyes line four.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.short_sighted_notes.value.trim()) return `expected short_sighted_notes to stay empty, got "${result.short_sighted_notes.value}"`;
+      if (result.short_sighted_notes.requiresReview) return "expected short_sighted_notes.requiresReview false — notes are free-text and never required";
+      return null;
+    }
+  },
+  {
+    name: "Short-sighted result mentioned with no 'test performed' statement — reads Not captured, needs tester confirmation",
+    input: {
+      rawTranscriptText: "The client already has glasses. Short-sighted right eye line four.",
+      transcriptSegments: [],
+      promptMarkers: [],
+      language: "en"
+    },
+    expect: (result) => {
+      if (result.short_sighted_test_performed.value !== NOT_CAPTURED_FIELD_VALUE) {
+        return `expected short_sighted_test_performed "${NOT_CAPTURED_FIELD_VALUE}", got ${result.short_sighted_test_performed.value}`;
+      }
+      if (!result.short_sighted_test_performed.requiresReview) return "expected short_sighted_test_performed.requiresReview true for the contradiction";
+      if (!result.short_sighted_test_performed.reason) return "expected a reason explaining the contradiction";
+      // The actual result value found in the transcript must survive, not be forced to "Not tested" — the tester still needs to see it.
+      if (result.short_sighted_right_result.value !== "Line 4") return `expected short_sighted_right_result Line 4 to survive, got ${result.short_sighted_right_result.value}`;
+      // The still-empty sides must never jump straight to Missing on their own — only Not tested (spec: "do not immediately mark all subfields Missing").
+      if (result.short_sighted_left_result.value !== NOT_TESTED_FIELD_VALUE) {
+        return `expected short_sighted_left_result "${NOT_TESTED_FIELD_VALUE}" while ambiguous, got ${result.short_sighted_left_result.value}`;
+      }
+      return null;
+    }
+  },
+  {
+    name: "No transcript at all — short-sighted module defaults to Not tested, no transcript-wide crash",
+    input: { rawTranscriptText: "", transcriptSegments: [], promptMarkers: [], language: "en" },
+    expect: (result) => {
+      if (result.short_sighted_test_performed.value !== NOT_TESTED_FIELD_VALUE) {
+        return `expected short_sighted_test_performed "${NOT_TESTED_FIELD_VALUE}" on an empty transcript, got ${result.short_sighted_test_performed.value}`;
+      }
+      for (const key of SHORT_SIGHTED_RESULT_FIELD_KEYS) {
+        if (result[key].value !== NOT_TESTED_FIELD_VALUE) return `expected ${key} "${NOT_TESTED_FIELD_VALUE}" on an empty transcript, got ${result[key].value}`;
+      }
       return null;
     }
   }

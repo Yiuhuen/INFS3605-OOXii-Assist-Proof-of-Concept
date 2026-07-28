@@ -6,10 +6,11 @@
  *
  * Run: npm run test:extraction
  */
-import { extractFieldsFromTranscript, runFieldExtractionSelfTest } from "../lib/fieldExtraction";
-import { buildLiveCapturedFields } from "../lib/liveCapturedFields";
+import { extractFieldsFromTranscript, runFieldExtractionSelfTest, SHORT_SIGHTED_RESULT_FIELD_KEYS } from "../lib/fieldExtraction";
+import { buildLiveCapturedFields, CAPTURED_TAB_LABELS, CORE_FIELD_KEYS, GLASSES_FIELD_KEYS } from "../lib/liveCapturedFields";
 import { qcReasons } from "../lib/qc";
 import { analyseTranscriptQuality, runTranscriptQualitySelfTest } from "../lib/transcriptQuality";
+import { NOT_CAPTURED_FIELD_VALUE, NOT_TESTED_FIELD_VALUE } from "../lib/types";
 import type { ExtractedFieldMap, TestRecord } from "../lib/types";
 
 interface Case {
@@ -45,20 +46,27 @@ function liveExtract(params: { finalTranscriptText?: string; interimTranscriptTe
   });
 }
 
-const LIVE_FIELD_COUNT = 7;
+/** Core tab now has 6 fields (glasses_selected moved to the Glasses tab alongside right/left lens + astigmatism — see lib/liveCapturedFields.ts CORE_FIELD_KEYS/GLASSES_FIELD_KEYS). */
+const LIVE_FIELD_COUNT = CORE_FIELD_KEYS.length;
 
-function liveCapturedCount(map: NonNullable<ReturnType<typeof liveExtract>>): number {
-  return Object.values(map).filter((field) => field.status !== "Missing").length;
+/** Counts only "Captured"/"Check" within a given tab's field list — mirrors RecordingScreen.tsx's own per-tab count, never blended across tabs and never counting a "Not tested" short-sighted field as captured. */
+function liveCapturedCount(map: NonNullable<ReturnType<typeof liveExtract>>, keys: readonly (keyof typeof map)[] = CORE_FIELD_KEYS): number {
+  return keys.filter((key) => map[key].status === "Captured" || map[key].status === "Check").length;
 }
 
 // ---------------------------------------------------------------------------
 // Live "Captured so far" preview (lib/liveCapturedFields.ts) — Phase 10 cases.
+// Counts below are scoped to the Core tab (6 fields: current glasses,
+// cataract, right/left eye, final line, comfort) unless stated otherwise —
+// glasses_selected, right/left lens, and astigmatism live on the Glasses tab
+// with their own separate count, and the short-sighted module has its own
+// "Not tested"-aware count (spec §3: no single misleading global "X of Y").
 // Note: glasses_selected's captured VALUE below is "+1.00", the bare diopter
 // the shared extractor (lib/fieldExtraction.ts) actually produces and the
 // existing "captures +1.00 conservatively" test above already locks in —
 // not "+1.00 reading glasses". Asserting the richer descriptive string here
 // would mean inventing new extraction behaviour never exercised anywhere
-// else (CSV export, QC, Review captured fields), for a live-only preview
+// else (CSV export, QC, Review test), for a live-only preview
 // that must stay a faithful glance at the same data those screens show.
 // ---------------------------------------------------------------------------
 
@@ -216,6 +224,131 @@ cases.push({
     return map.cataract_history_confirmed.status === "Check"
       ? null
       : `expected Check, got ${map.cataract_history_confirmed.status} (value: ${JSON.stringify(map.cataract_history_confirmed.value)})`;
+  }
+});
+
+cases.push({
+  name: "Live 14. Right/left lens selected land on the Glasses tab, independent of the Core tab count",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "Right lens selected is plus one point zero zero. Left lens selected is plus one point five." });
+    if (!map) return "expected a non-null live captured field map";
+    // glasses_selected also picks up a value here — its own matcher looks for
+    // ANY worded diopter phrase in the text (not just one following the word
+    // "glasses"), so a lens-selection sentence legitimately satisfies it too;
+    // see matchGlassesSelected in lib/fieldExtraction.ts. 3, not 2.
+    return (
+      expectEqual("right_lens_selected value", map.right_lens_selected.value, "+1.00") ??
+      expectEqual("left_lens_selected value", map.left_lens_selected.value, "+1.50") ??
+      expectEqual("Glasses tab count", liveCapturedCount(map, GLASSES_FIELD_KEYS), 3) ??
+      expectEqual("Core tab count unaffected", liveCapturedCount(map), 0)
+    );
+  }
+});
+
+cases.push({
+  name: "Live 15. Short-sighted fields default to Not tested on the live panel when never mentioned",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The client already has glasses." });
+    if (!map) return "expected a non-null live captured field map";
+    for (const key of ["short_sighted_test_performed", ...SHORT_SIGHTED_RESULT_FIELD_KEYS] as const) {
+      if (map[key].status !== "Not tested") return `expected ${key} status Not tested, got ${map[key].status}`;
+      if (map[key].value !== NOT_TESTED_FIELD_VALUE) return `expected ${key} value "${NOT_TESTED_FIELD_VALUE}", got ${map[key].value}`;
+    }
+    return null;
+  }
+});
+
+cases.push({
+  name: "Live 16. Short-sighted module performed live — right result Captured, left result still Missing",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "Short-sighted test performed. Short-sighted right eye line four." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("performed status", map.short_sighted_test_performed.status, "Captured") ??
+      expectEqual("right result status", map.short_sighted_right_result.status, "Captured") ??
+      expectEqual("left result status", map.short_sighted_left_result.status, "Missing")
+    );
+  }
+});
+
+cases.push({
+  name: "Live 17. Short-sighted result mentioned with no 'test performed' statement reads Check (Not captured) on the live panel",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The client already has glasses. Short-sighted right eye line four." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("performed value", map.short_sighted_test_performed.value, NOT_CAPTURED_FIELD_VALUE) ??
+      expectEqual("performed status", map.short_sighted_test_performed.status, "Check")
+    );
+  }
+});
+
+// Test 5 (task spec): Captured-so-far tab labels must be workflow-based, never
+// vague ("Core") or diagnostic-sounding ("Short-sighted") — see
+// components/screens/RecordingScreen.tsx CapturedSoFarPanel, the only place
+// these render.
+cases.push({
+  name: "Test 5. Captured-so-far tab labels are workflow-based, not diagnostic",
+  run: () => {
+    return (
+      expectEqual("core tab label", CAPTURED_TAB_LABELS.core, "Vision") ??
+      expectEqual("glasses tab label", CAPTURED_TAB_LABELS.glasses, "Glasses") ??
+      expectEqual("shortSighted tab label", CAPTURED_TAB_LABELS.shortSighted, "Optional tests") ??
+      (Object.values(CAPTURED_TAB_LABELS).includes("Core") ? "tab labels must never include the vague 'Core'" : null) ??
+      (Object.values(CAPTURED_TAB_LABELS).includes("Short-sighted") ? "tab labels must never include the diagnostic-sounding 'Short-sighted'" : null) ??
+      (Object.values(CAPTURED_TAB_LABELS).includes("Long-sighted") ? "tab labels must never include the diagnostic-sounding 'Long-sighted'" : null)
+    );
+  }
+});
+
+// Test 1 (task spec, export half): an optional test that was never performed
+// must export "Not tested", never a blank cell — verified directly against
+// the same qc_reason/status helpers lib/csv.ts calls.
+cases.push({
+  name: "Test 1 (export). Not-performed short-sighted fields never export blank",
+  run: () => {
+    const result = extract("The client already has glasses.");
+    for (const key of SHORT_SIGHTED_RESULT_FIELD_KEYS) {
+      if (key === "short_sighted_notes") continue; // free-text — legitimately blank until the tester writes something.
+      if (!result[key].value.trim()) return `expected ${key} to export "${NOT_TESTED_FIELD_VALUE}", never blank`;
+    }
+    return null;
+  }
+});
+
+// Test 3 (task spec, QC half): the "Not captured" ambiguous state surfaces
+// its own spec-worded QC reason, not a generic low-confidence message.
+cases.push({
+  name: "Test 3 (QC). 'Not captured' surfaces a confirm-with-tester QC reason, not generic low-confidence noise",
+  run: () => {
+    const extractedMap = extract("The client already has glasses. Short-sighted right eye line four.");
+    const record = {
+      qc_status: "Unreviewed",
+      sync_status: "Local only",
+      recording_status: "recorded",
+      raw_transcript_text: "The client already has glasses. Short-sighted right eye line four.",
+      unclear_segments: [],
+      has_unvisited_prompts: false,
+      has_unrecorded_viewed_prompts: false,
+      demo_helper_used: false,
+      confidence_score: 0.8,
+      missing_fields: [],
+      edited_by_user: false,
+      transcript_quality_flags: [],
+      unresolved_transcript_flag_ids: [],
+      translation_review_required: false,
+      corrections_applied: [],
+      extraction_safety_status: "safe",
+      transcript_quality_risk: "low",
+      extracted_json: { field_confidence: extractedMap },
+      edited_extracted_json: null,
+      fields_reviewed_by_tester: false
+    } as unknown as TestRecord;
+
+    const reasons = qcReasons(record);
+    return reasons.some((reason) => reason.includes("confirm with the tester"))
+      ? null
+      : `expected a "confirm with the tester" QC reason, got: ${JSON.stringify(reasons)}`;
   }
 });
 

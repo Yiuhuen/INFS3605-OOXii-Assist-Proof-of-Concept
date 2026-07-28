@@ -117,6 +117,32 @@ export const NEGATION_PAIRS: NegationPairDefinition[] = [
 ];
 
 /**
+ * Hedge/uncertainty phrases — spec's "mark uncertain values as Check, not
+ * Captured". Single source of truth for both lib/transcriptQuality.ts (feeds
+ * the persisted transcript_quality_flags / requiresQc audit trail) and
+ * lib/liveCapturedFields.ts (the Recording screen's live preview only).
+ * Deliberately not a claim that the recognizer is wrong — a tester or client
+ * who says "maybe" or "I think" meant to sound uncertain, and a value
+ * extracted from that speech must never be presented as confidently
+ * confirmed.
+ */
+export const UNCERTAINTY_PHRASES: string[] = [
+  "maybe",
+  "not sure",
+  "unsure",
+  "unclear",
+  "unknown",
+  "possibly",
+  "perhaps",
+  "i think",
+  "i believe",
+  "might be",
+  "i guess",
+  "sort of",
+  "cannot tell"
+];
+
+/**
  * Expected keywords per prompt step, keyed by the real step ids from
  * lib/languagePacks.ts. A step with no entry (or an empty array) is skipped
  * by the "missing expected term" rule rather than treated as a failure.
