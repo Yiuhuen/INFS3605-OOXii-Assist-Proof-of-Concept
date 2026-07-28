@@ -33,7 +33,7 @@ export function ScreenHeader({
           </button>
         )}
         <div className="min-w-0">
-          {subtitle && <p className="truncate text-xs font-bold uppercase tracking-wide text-field-muted">{subtitle}</p>}
+          {subtitle && <p className="truncate text-xs font-bold text-field-muted">{subtitle}</p>}
           <h1 className="text-lg font-black leading-tight">{title}</h1>
         </div>
       </div>

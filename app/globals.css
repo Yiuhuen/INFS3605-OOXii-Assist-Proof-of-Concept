@@ -132,6 +132,29 @@ textarea:focus-visible {
     background: var(--bg-deep);
   }
 
+  /* Transcript highlighting — never colour alone: bold + underline + background so it still reads in high-contrast mode. */
+  .transcript-highlight {
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-color: var(--gold);
+    text-underline-offset: 2px;
+    background: var(--gold-tint);
+    border-radius: 0.2rem;
+    padding: 0 0.15rem;
+  }
+
+  .transcript-highlight-focus {
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 2px;
+    background: var(--gold);
+    color: var(--gold-ink);
+    border-radius: 0.25rem;
+    padding: 0 0.2rem;
+    box-shadow: 0 0 0 2px var(--gold-strong);
+  }
+
   /* Inputs */
   .field-input {
     @apply w-full rounded-xl px-4 py-3 text-base placeholder:opacity-50 focus:outline-none;
@@ -207,12 +230,48 @@ textarea:focus-visible {
     background: var(--record-strong);
   }
 
-  /* Badges */
+  /* Badges — sentence case, never uppercase tracking; reserved for the few
+     places a bordered pill is still the right call (headers, admin panels).
+     Workflow rows use .status-dot instead. */
   .status-pill {
-    @apply inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide;
+    @apply inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold;
     border: 1px solid var(--line);
     background: var(--bg-surface);
     color: var(--muted);
+  }
+
+  /* Calm status row indicator: small dot + sentence-case text. The default
+     replacement for StatusBadge in workflow rows — one per row, no border,
+     no background, no uppercase. */
+  .status-dot {
+    @apply inline-flex items-center gap-1.5 text-xs font-semibold;
+    color: var(--text);
+  }
+
+  .status-dot::before {
+    content: "";
+    @apply h-2 w-2 shrink-0 rounded-full;
+    background: var(--muted);
+  }
+
+  .status-dot.is-good::before {
+    background: var(--good);
+  }
+
+  .status-dot.is-warn::before {
+    background: var(--warn);
+  }
+
+  .status-dot.is-danger::before {
+    background: var(--danger);
+  }
+
+  .status-dot.is-muted {
+    color: var(--muted);
+  }
+
+  .status-dot.is-muted::before {
+    background: var(--line);
   }
 
   .badge-warn {
@@ -415,5 +474,13 @@ textarea:focus-visible {
   .field-card,
   .field-card-soft {
     padding: 0.65rem 0.75rem;
+  }
+
+  /* QC review's "open the record first" hint is helpful but not essential —
+     the button labels already say what to do. On short viewports (320x568)
+     the shell clips rather than scrolls, so this line was getting cut off
+     mid-word instead of wrapping; drop it here to keep the visible text whole. */
+  .qc-review-hint {
+    display: none;
   }
 }

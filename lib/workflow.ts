@@ -79,8 +79,8 @@ export function getNextAction(state: WorkflowState): NextAction {
     // away via More, but it must never occupy the single primary action, or
     // the field loop (test client after client) stalls after the first save.
     return {
-      label: "Start new anonymous client",
-      subtitle: "Create a non-personal client ID and begin the guided test.",
+      label: "Start new test",
+      subtitle: "Generates a client ID — no name, DOB, phone, or address.",
       targetScreen: "client",
       urgency: "normal",
       stepId: "client"

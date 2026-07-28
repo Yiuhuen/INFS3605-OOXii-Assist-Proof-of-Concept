@@ -21,6 +21,7 @@ import { recordsToLonglistCsv, recordsToAuditCsv, downloadCsv } from "@/lib/csv"
 import { getFallbackPack } from "@/lib/languagePacks";
 import { generateClientId, generateMarkerId, generateRecordId, generateSegmentId } from "@/lib/ids";
 import { extractFieldsFromTranscript } from "@/lib/fieldExtraction";
+import { buildLiveCapturedFields } from "@/lib/liveCapturedFields";
 import { computeProcessingStatus, evaluateNeedsQc, recordNeedsQc } from "@/lib/qc";
 import { getNextAction, type WorkflowState } from "@/lib/workflow";
 import { clearAllAudioBlobs, getAudioBlob, saveAudioBlob } from "@/lib/offlineDb";
@@ -47,7 +48,10 @@ import type { InsightTargetPage } from "@/lib/insights";
 import { analyseTranscriptQuality, applySuggestedCorrection, deriveExtractionSafetyStatus, HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
 import { analyseTranslationSafety } from "@/lib/translationSafety";
 import { DEMO_HELPERS_ENABLED, DEMO_SAMPLE_TRANSCRIPT } from "@/lib/demoHelpers";
+import { seedDemoRecords } from "@/lib/demoRecords";
 import {
+  appendDemoRecords,
+  clearDemoRecordsOnly,
   clearRecords,
   demoTester,
   loadLanguagePacks,
@@ -174,6 +178,24 @@ function reconcileWithManualFallback(fieldMap: ExtractedFieldMap, manual: Manual
     }
   });
   return { values, fieldMap: reconciled };
+}
+
+/**
+ * Debounces a fast-changing value — returns `value` only once it has stopped
+ * changing for `delayMs`. Used only for the Recording screen's live
+ * "Captured so far" preview (interim transcript / manual fallback text can
+ * change on every recognition frame or keystroke); a bare setTimeout inside
+ * a plain effect keyed on the value itself, so it never touches recording,
+ * timer, or STT state and can't loop — `setDebounced` only ever fires from
+ * the timeout callback, never synchronously during render.
+ */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
 }
 
 export default function Home() {
@@ -465,6 +487,38 @@ export default function Home() {
   );
   const hasUnrecordedViewedPromptsPreview = unrecordedViewedSteps.length > 0;
 
+  // Progressive auto-fill (spec §7) — a cheap draft extraction pass off
+  // whatever's been captured SO FAR, recomputed live as the tester speaks.
+  // Deliberately never touches `extracted`/saved-record state; this is a
+  // glance-only preview for RecordingScreen's "Captured so far" panel,
+  // replaced entirely by the real runExtraction() at Finish & review.
+  const liveTranscriptFinalText = useMemo(
+    () =>
+      transcriptSegments
+        .filter((segment) => segment.isFinal && segment.text.trim())
+        .map((segment) => segment.text)
+        .join("\n"),
+    [transcriptSegments]
+  );
+  // interimText and the manual-fallback note can both change on every
+  // recognition frame / keystroke — debounced (350ms) so live extraction
+  // doesn't re-run on every character, per the live-preview module's own
+  // "never touches recording/timer/STT" contract.
+  const debouncedInterimText = useDebouncedValue(interimText, 350);
+  const debouncedManualFallbackText = useDebouncedValue(manualFields.additional_notes, 350);
+  const liveDraftFields = useMemo(
+    () =>
+      buildLiveCapturedFields({
+        finalTranscriptText: liveTranscriptFinalText,
+        interimTranscriptText: debouncedInterimText,
+        manualFallbackText: debouncedManualFallbackText,
+        transcriptSegments,
+        promptMarkers,
+        language: activePack.code
+      }),
+    [liveTranscriptFinalText, debouncedInterimText, debouncedManualFallbackText, transcriptSegments, promptMarkers, activePack.code]
+  );
+
   // Transcript quality / translation safety — recomputed live as the tester
   // edits, since these are draft-review signals, never a one-time judgement.
   // See lib/transcriptQuality.ts / lib/translationSafety.ts for the rules.
@@ -527,32 +581,6 @@ export default function Home() {
   /** True when at least one draft-extracted field still needs a look and the tester hasn't ticked "Fields reviewed" yet — spec §10. */
   const fieldsRequireReviewUnconfirmedPreview =
     !fieldsReviewedConfirmed && Boolean(fieldsEffective?.field_confidence && MANUAL_FIELD_KEYS.some((key) => fieldsEffective.field_confidence?.[key]?.requiresReview));
-  const fieldsNeedsQc = fieldsEffective
-    ? evaluateNeedsQc({
-        recordingStatus,
-        editedByUser: editedFields !== null,
-        confidenceScore: fieldsEffective.confidence_score,
-        missingFieldsCount: fieldsEffective.missing_fields.length,
-        transcriptCaptured: transcriptCapturedPreview,
-        manualFallbackUsed: manualFallbackUsedPreview,
-        hasUnclearSegments: unclearSegments.length > 0,
-        hasUnvisitedPrompts: hasUnvisitedPromptsPreview,
-        hasUnrecordedViewedPrompts: hasUnrecordedViewedPromptsPreview,
-        transcriptQualityRisk: transcriptQualityReport.overallRisk,
-        hasClinicalCorrection: hasClinicalCorrectionPreview,
-        translationReviewRequired: translationSafetyReport.requiresQc,
-        extractionUnsafe: extractionSafetyStatusPreview === "draft_review_required",
-        fieldsRequireReviewUnconfirmed: fieldsRequireReviewUnconfirmedPreview,
-        demoHelperUsed
-      })
-    : false;
-  const fieldsProcessingStatus: ProcessingStatus = computeProcessingStatus({
-    transcriptCaptured: transcriptCapturedPreview,
-    needsQc: fieldsNeedsQc,
-    qcApproved: false,
-    synced: false
-  });
-
   const recordsNeedingQc = records.filter(recordNeedsQc).length;
   const recordsPendingSync = records.filter((record) => record.sync_status === "Pending sync").length;
 
@@ -695,6 +723,24 @@ export default function Home() {
     setRecords([]);
     resetTest();
     setScreen("dashboard");
+  }
+
+  /**
+   * "Load synthetic demo data" (More → Admin tools) — appends the 12
+   * deterministic synthetic records from lib/demoRecords.ts so Insights/QC/
+   * Export have realistic data to show. Never touches real, tester-created
+   * records (see appendDemoRecords in lib/storage.ts) — re-running this
+   * replaces any previously-loaded demo dataset rather than duplicating it.
+   */
+  function loadDemoData() {
+    appendDemoRecords(seedDemoRecords());
+    setRecords(loadRecords());
+  }
+
+  /** "Clear synthetic demo data" (More → Admin tools) — removes only the synthetic demo records, leaving every real record untouched. */
+  function clearDemoDataOnly() {
+    clearDemoRecordsOnly();
+    setRecords(loadRecords());
   }
 
   function beginDemoLogin() {
@@ -1535,6 +1581,10 @@ export default function Home() {
       demo_helper_used: demoHelperUsed,
       recording_attempt_number: recordingAttemptNumber,
       rerecord_used: rerecordUsed,
+      demo_record: false,
+      demo_dataset_version: "",
+      outreach_session: "",
+      language_pack_label: "",
       client_snapshot: client,
       created_at: now,
       updated_at: now
@@ -1592,6 +1642,13 @@ export default function Home() {
    * confidence "high", requiresReview cleared for that field. Without this,
    * field_confidence kept showing the pre-edit transcript evidence/low
    * confidence next to a value the reviewer had already corrected.
+   *
+   * The original extraction's evidence quote is deliberately CARRIED FORWARD
+   * (never overwritten silently) so the audit trail — original extracted
+   * value (still intact in record.extracted_json, untouched here), corrected
+   * value, and the transcript evidence that produced the original — all
+   * survive a QC correction and still show up in the Full Audit Longlist
+   * export's evidence_quote column (lib/csv.ts).
    */
   function updateQcRecord(record: TestRecord, patch: Partial<ExtractedFields>) {
     const base = record.edited_extracted_json ?? record.extracted_json;
@@ -1599,8 +1656,20 @@ export default function Home() {
     const updatedConfidence = { ...(base.field_confidence ?? {}) };
     (Object.keys(patch) as Array<keyof ExtractedFields>).forEach((key) => {
       if (key === "missing_fields" || key === "confidence_score" || key === "field_confidence") return;
+      const fieldKey = key as keyof ManualExtractedFields;
       const value = String(patch[key] ?? "");
-      updatedConfidence[key as keyof ManualExtractedFields] = { value, source: "manual", confidence: "high", requiresReview: false };
+      const priorMeta = base.field_confidence?.[fieldKey];
+      const wasChanged = Boolean(priorMeta?.value?.trim()) && priorMeta!.value !== value;
+      updatedConfidence[fieldKey] = {
+        value,
+        source: "manual",
+        confidence: "high",
+        requiresReview: false,
+        evidence: priorMeta?.evidence,
+        reason: wasChanged
+          ? `Corrected during QC review — was "${priorMeta!.value}" (${priorMeta!.source}).`
+          : "Confirmed during QC review."
+      };
     });
     nextExtracted.field_confidence = updatedConfidence;
     const transcriptCaptured = Boolean(record.raw_transcript_text.trim()) || record.transcript_segments.some((segment) => segment.isFinal && segment.text.trim());
@@ -1749,15 +1818,19 @@ export default function Home() {
 
       {isAuthenticated && screen === "dashboard" && (
         <Dashboard
-          tester={tester}
           activePack={activePack}
           isOnline={isOnline}
           nextAction={nextAction}
+          savedRecords={records.length}
           recordsNeedingQc={recordsNeedingQc}
           recordsPendingSync={recordsPendingSync}
           onNextAction={goToNextAction}
           onMore={() => setScreen("more")}
           onLogout={handleLogout}
+          onQc={() => setScreen("qc")}
+          onExport={() => setScreen("export")}
+          onTrainingRefresh={() => setScreen("training")}
+          onSettings={() => setScreen("settings")}
         />
       )}
 
@@ -1765,6 +1838,7 @@ export default function Home() {
         <MoreScreen
           isOnline={isOnline}
           recordsNeedingQc={recordsNeedingQc}
+          hasDemoRecords={records.some((record) => record.demo_record)}
           showSttDiagnostics={showSttDiagnostics}
           onToggleSttDiagnostics={updateShowSttDiagnostics}
           onLanguage={() => setScreen("language")}
@@ -1775,6 +1849,8 @@ export default function Home() {
           onExport={() => setScreen("export")}
           onAdmin={() => setScreen("admin")}
           onResetDemoData={resetDemoData}
+          onLoadDemoData={loadDemoData}
+          onClearDemoData={clearDemoDataOnly}
           onBack={() => setScreen("dashboard")}
         />
       )}
@@ -1804,6 +1880,8 @@ export default function Home() {
         <ClientScreen
           client={client}
           setClient={setClient}
+          languagePackName={activePack.name}
+          testerLabel={tester.name}
           isOnline={isOnline}
           onBack={() => setScreen("dashboard")}
           onContinue={() => {
@@ -1820,7 +1898,6 @@ export default function Home() {
           step={currentStep}
           stepIndex={currentStepIndex}
           totalSteps={activePack.prompts_json.length}
-          languageName={activePack.name}
           languageCode={activePack.code}
           speechSpeed={displaySettings.speechSpeed}
           englishGloss={englishGloss}
@@ -1839,6 +1916,7 @@ export default function Home() {
           nudgeVisible={nudgeVisible}
           canFinish={canFinishRecording}
           transcriptSegments={transcriptSegments}
+          liveFields={liveDraftFields}
           interimText={interimText}
           transcriptUnavailable={transcriptUnavailable}
           transcriptUnavailableReason={transcriptUnavailableReason}
@@ -1891,6 +1969,8 @@ export default function Home() {
           recordingDurationSeconds={elapsedSeconds}
           unclearSegments={unclearSegments}
           promptMarkers={promptMarkers}
+          transcriptSegments={transcriptSegments}
+          language={activePack.code}
           missingPromptLabels={missingPromptSteps.map((step) => step.client_prompt)}
           unrecordedPromptLabels={unrecordedViewedSteps.map((step) => step.client_prompt)}
           isOnline={isOnline}
@@ -1918,7 +1998,6 @@ export default function Home() {
           clientId={client.id}
           extracted={extracted}
           editedFields={editedFields}
-          processingStatus={fieldsProcessingStatus}
           isOnline={isOnline}
           onEditField={editExtractedField}
           onBackToTranscript={() => setScreen("transcript")}
@@ -1931,6 +2010,7 @@ export default function Home() {
           fieldSuggestions={fieldSuggestions}
           onUseSuggestion={useFieldSuggestion}
           demoHelperUsed={demoHelperUsed}
+          transcriptText={correctedTranscript || englishProcessingTranscript || rawTranscript}
         />
       )}
 
@@ -2006,7 +2086,7 @@ export default function Home() {
       <ConfirmDialog
         open={rerecordConfirmOpen}
         title="Discard this recording and rerecord?"
-        body="This will remove the current audio and draft transcript for this anonymous client. You can then record the conversation again."
+        body="This will remove the current audio and draft transcript for this test. You can then record the conversation again."
         confirmLabel="Discard and rerecord"
         onConfirm={confirmRerecord}
         onCancel={cancelRerecord}

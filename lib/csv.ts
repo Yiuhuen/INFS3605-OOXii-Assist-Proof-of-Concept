@@ -1,56 +1,118 @@
-import type { FieldConfidence, ManualExtractedFields, TestRecord } from "./types";
+import { LANGUAGE_LABELS } from "./insights";
+import { exportQcStatus, fieldQcReason, qcReasonSummary, recordNeedsQc } from "./qc";
+import { UNKNOWN_FIELD_VALUE } from "./types";
+import type { FieldConfidence, FieldConfidenceLevel, ManualExtractedFields, SyncStatus, TestRecord } from "./types";
 
 function escapeCsv(value: unknown) {
   const text = value === undefined || value === null ? "" : String(value);
   return `"${text.replaceAll('"', '""')}"`;
 }
 
+const SYNC_STATUS_SLUGS: Record<SyncStatus, string> = {
+  Synced: "synced",
+  "Local only": "local_only",
+  "Pending sync": "pending_sync",
+  Failed: "failed"
+};
+
+/** "rerecorded" only once a Rerecord has actually produced the saved attempt (attempt 2+) — attempt 1 with rerecord_used still false is plain "recorded". */
+function recordingModeOf(record: TestRecord) {
+  if (record.recording_status === "manual_override") return "manual_override";
+  if (record.rerecord_used && record.recording_attempt_number > 1) return "rerecorded";
+  return "recorded";
+}
+
+/** Language display name — a demo record's language_pack_label override wins (for illustrative outreach variety), otherwise the real LanguageCode's display name. */
+function languagePackLabel(record: TestRecord) {
+  return record.language_pack_label.trim() || LANGUAGE_LABELS[record.language] || record.language;
+}
+
+/** Empty/UNKNOWN internal sentinel → a controlled, human-readable display phrase for clinical CSV columns. Internal field_source/field_confidence/requires_review/qc_reason still carry the precise machine-readable signal (see auditRowsForRecord) — this is display-only. */
+function displayValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === UNKNOWN_FIELD_VALUE) return "Not captured";
+  return trimmed;
+}
+
+function transcriptAvailability(record: TestRecord) {
+  return {
+    transcript_available: Boolean(record.raw_transcript_text.trim()) || Boolean(record.corrected_transcript_text.trim()),
+    raw_transcript_present: Boolean(record.raw_transcript_text.trim()),
+    corrected_transcript_present: Boolean(record.corrected_transcript_text.trim())
+  };
+}
+
 /**
- * A. OOXii Data Longlist — the core operational dataset for QC and reporting:
- * captured/confirmed fields plus client snapshot demographics. Deliberately
- * excludes raw transcript text/segments and internal audit metadata (see the
- * Full Non-Personal Audit Longlist below). Anonymous client IDs only — never
- * includes name, DOB, phone, address, or GPS because the app never collects
- * them.
+ * A. OOXii Data Longlist — the core operational dataset for QC, training,
+ * stock, and export-readiness reporting: one row per record. Anonymous
+ * client IDs only — never includes name, DOB, phone, address, or GPS,
+ * because TestRecord/ClientRecord never collect them (see lib/types.ts).
+ * Demographic fields (age_band/gender) live only on client_snapshot and are
+ * deliberately excluded from this export by default.
  */
 export const LONGLIST_CSV_COLUMNS = [
-  "client_id",
-  "tester_id",
-  "test_date",
+  "record_id",
+  "anonymous_client_id",
+  "created_at",
+  "outreach_session",
+  "tester_label",
+  "language_pack",
   "deployment_site",
-  "age_band",
-  "gender",
-  "cataract_history",
   "current_glasses",
+  "cataract_history_confirmed",
   "right_eye_distance_result",
   "left_eye_distance_result",
   "final_readable_line",
-  "glasses_selected",
   "comfort_response",
-  "additional_notes",
+  "glasses_selected_dispensed",
+  "additional_notes_non_personal",
+  "recording_mode",
+  "recording_success",
+  "recording_attempt_number",
+  "rerecord_used",
+  "capture_confidence",
+  "qc_required",
   "qc_status",
-  "sync_status"
+  "qc_reason_summary",
+  "export_ready",
+  "saved_locally",
+  "sync_status",
+  "demo_record",
+  "demo_dataset_version"
 ] as const;
 
 function longlistRow(record: TestRecord) {
   const effective = record.edited_extracted_json ?? record.extracted_json;
+  const needsQc = recordNeedsQc(record);
   return [
+    record.id,
     record.client_id,
-    record.tester_id,
     record.created_at,
-    record.client_snapshot.location_site,
-    record.client_snapshot.age_band,
-    record.client_snapshot.gender,
-    effective.cataract_history_confirmed,
-    effective.current_glasses,
-    effective.right_eye_distance_result,
-    effective.left_eye_distance_result,
-    effective.final_readable_line,
-    effective.glasses_selected,
-    effective.comfort_response,
-    effective.additional_notes,
-    record.qc_status,
-    record.sync_status
+    record.outreach_session,
+    record.tester_id,
+    languagePackLabel(record),
+    record.deployment_site,
+    displayValue(effective.current_glasses),
+    displayValue(effective.cataract_history_confirmed),
+    displayValue(effective.right_eye_distance_result),
+    displayValue(effective.left_eye_distance_result),
+    displayValue(effective.final_readable_line),
+    displayValue(effective.comfort_response),
+    displayValue(effective.glasses_selected),
+    effective.additional_notes.trim() || "No additional non-personal notes",
+    recordingModeOf(record),
+    record.recording_status === "recorded",
+    record.recording_attempt_number,
+    record.rerecord_used,
+    record.confidence_score,
+    needsQc,
+    exportQcStatus(record),
+    qcReasonSummary(record),
+    !needsQc,
+    true,
+    SYNC_STATUS_SLUGS[record.sync_status],
+    record.demo_record,
+    record.demo_dataset_version
   ];
 }
 
@@ -60,124 +122,159 @@ export function recordsToLonglistCsv(records: TestRecord[]) {
 }
 
 /**
- * B. Full Non-Personal Audit Longlist — every OOXii Data Longlist column plus
- * the fuller audit trail: transcript content (raw/English-processing/
- * corrected), confidence and missing-field detail, edit/QC-verification
- * flags, recording and sync metadata, and unclear-segment detail. Still
- * anonymous-ID only and never includes name, DOB, phone, address, or GPS —
- * but because it carries spoken/written content, handle this export more
- * carefully than the core data longlist above.
+ * B. Full Non-Personal Audit Longlist — long/tidy format: one row per
+ * (record, field) pair across the 8 manual/draft fields, carrying the
+ * field-level evidence trail (source, confidence, evidence quote, QC reason,
+ * prompt coverage) the OOXii Data Longlist above deliberately omits. Still
+ * anonymous-ID only and never includes name, DOB, phone, address, or GPS.
  */
 export const AUDIT_CSV_COLUMNS = [
-  ...LONGLIST_CSV_COLUMNS,
-  "language",
-  "raw_transcript_language",
-  "raw_transcript_text",
-  "english_processing_transcript",
-  "corrected_transcript_text",
-  "confidence_score",
-  "missing_fields",
-  "edited_by_user",
-  "requires_qc_verification",
-  "recording_status",
-  "manual_override_reason",
-  "unclear_segments",
-  "prompt_markers",
-  "has_unvisited_prompts",
-  "has_unrecorded_viewed_prompts",
-  "processing_status",
-  "sync_attempts",
-  "transcript_quality_risk",
-  "transcript_quality_flags",
-  "suggested_corrections",
-  "corrections_applied",
-  "unresolved_transcript_flags",
-  "translation_review_required",
-  "right_eye_distance_result_source",
-  "right_eye_distance_result_confidence",
-  "right_eye_distance_result_evidence",
-  "right_eye_distance_result_edited",
-  "left_eye_distance_result_source",
-  "left_eye_distance_result_confidence",
-  "left_eye_distance_result_evidence",
-  "left_eye_distance_result_edited",
-  "final_readable_line_source",
-  "final_readable_line_confidence",
-  "final_readable_line_evidence",
-  "final_readable_line_edited",
-  "glasses_selected_source",
-  "glasses_selected_confidence",
-  "glasses_selected_evidence",
-  "glasses_selected_edited",
-  "comfort_response_source",
-  "comfort_response_confidence",
-  "comfort_response_evidence",
-  "comfort_response_edited",
-  "extraction_safety_status",
-  "fields_reviewed_by_tester",
-  "demo_helper_used",
+  "record_id",
+  "anonymous_client_id",
+  "demo_record",
+  "demo_dataset_version",
+  "created_at",
+  "outreach_session",
+  "tester_label",
+  "language_pack",
+  "deployment_site",
+  "field_name",
+  "field_value",
+  "field_source",
+  "field_confidence",
+  "field_status",
+  "evidence_quote",
+  "manually_edited",
+  "requires_review",
+  "qc_reason",
+  "prompt_step_id",
+  "prompt_viewed",
+  "prompt_recorded",
+  "recording_mode",
+  "recording_success",
   "recording_attempt_number",
   "rerecord_used",
-  "created_at",
-  "updated_at"
+  "transcript_available",
+  "raw_transcript_present",
+  "corrected_transcript_present",
+  "saved_locally",
+  "sync_status",
+  "export_ready"
 ] as const;
 
-/** Audit-only per-field draft metadata columns — spec §12. "" for every column when the field has no field_confidence entry (e.g. a record saved before this feature, or a manually-only-entered field never run through extraction). */
+/** Audit-only translation of the internal FieldConfidence.source enum to the export's plainer vocabulary. */
+const FIELD_SOURCE_LABELS: Record<FieldConfidence["source"], string> = {
+  manual: "manual_transcript",
+  transcript: "transcript",
+  corrected_transcript: "corrected_transcript",
+  unknown: "not_captured"
+};
+
+/** Best-effort numeric translation of the qualitative confidence tier for the audit export's numeric field_confidence column. */
+const CONFIDENCE_NUMERIC: Record<FieldConfidenceLevel, number> = { high: 0.95, medium: 0.75, low: 0.5, unknown: 0 };
+
+/** Short, stable step-id label per field for the audit export — not the app's internal PromptStep ids, just a readable slug. */
+const PROMPT_STEP_LABELS: Record<keyof ManualExtractedFields, string> = {
+  current_glasses: "current_glasses",
+  cataract_history_confirmed: "cataract_history",
+  right_eye_distance_result: "right_eye",
+  left_eye_distance_result: "left_eye",
+  final_readable_line: "final_line",
+  comfort_response: "comfort",
+  glasses_selected: "glasses_selected",
+  additional_notes: "additional_notes"
+};
+
+/** The 3 fields with a real, step-scoped PromptStep id in the active language pack (see lib/languagePacks.ts) — coverage for every other field is derived from the record-level has_unvisited_prompts/recording_status flags instead. */
+const REAL_PACK_STEP_ID: Partial<Record<keyof ManualExtractedFields, string>> = {
+  right_eye_distance_result: "right-distance",
+  left_eye_distance_result: "left-distance",
+  glasses_selected: "glasses-check"
+};
+
+/** field_status vocabulary per the record-model spec: suggested / reviewed / unknown / needs_review / manual_edit. */
+function fieldStatus(record: TestRecord, meta: FieldConfidence | undefined): string {
+  if (!meta || !meta.value.trim()) return "unknown";
+  if (record.qc_status === "Approved") return "reviewed";
+  if (meta.source === "manual") return "manual_edit";
+  if (meta.requiresReview || meta.confidence === "low") return "needs_review";
+  return "suggested";
+}
+
+/** Whether this field's prompt was viewed/captured-in-audio — real per-step marker lookup for the 3 pack-scoped fields, record-level flags for the rest (see REAL_PACK_STEP_ID doc comment). */
+function promptCoverage(record: TestRecord, key: keyof ManualExtractedFields): { viewed: boolean; recorded: boolean } {
+  const stepId = REAL_PACK_STEP_ID[key];
+  if (stepId) {
+    const viewed = record.prompt_markers.some((marker) => marker.stepId === stepId);
+    const recorded = record.prompt_markers.some((marker) => marker.stepId === stepId && marker.capturedDuringRecording);
+    return { viewed, recorded };
+  }
+  return { viewed: !record.has_unvisited_prompts, recorded: record.recording_status === "recorded" };
+}
+
 const AUDIT_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
+  "current_glasses",
+  "cataract_history_confirmed",
   "right_eye_distance_result",
   "left_eye_distance_result",
   "final_readable_line",
+  "comfort_response",
   "glasses_selected",
-  "comfort_response"
+  "additional_notes"
 ];
 
-function fieldConfidenceColumns(meta: FieldConfidence | undefined): [string, string, string, string] {
-  if (!meta) return ["", "", "", ""];
-  return [meta.source, meta.confidence, meta.evidence ?? "", meta.source === "manual" ? "yes" : "no"];
-}
-
-function auditRow(record: TestRecord) {
-  const unresolvedFlags = record.transcript_quality_flags.filter((flag) => record.unresolved_transcript_flag_ids.includes(flag.id));
-  const effectiveFields = record.edited_extracted_json ?? record.extracted_json;
-  const fieldConfidenceColumnsForRecord = AUDIT_FIELD_KEYS.flatMap((key) => fieldConfidenceColumns(effectiveFields.field_confidence?.[key]));
-  return [
-    ...longlistRow(record),
-    record.language,
-    record.raw_transcript_language,
-    record.raw_transcript_text,
-    record.english_processing_transcript,
-    record.corrected_transcript_text,
-    record.confidence_score,
-    record.missing_fields.join("; "),
-    record.edited_by_user ? "yes" : "no",
-    record.requires_qc_verification ? "yes" : "no",
-    record.recording_status,
-    record.manual_override_reason,
-    JSON.stringify(record.unclear_segments),
-    JSON.stringify(record.prompt_markers),
-    record.has_unvisited_prompts ? "yes" : "no",
-    record.has_unrecorded_viewed_prompts ? "yes" : "no",
-    record.processing_status,
-    record.sync_attempts,
-    record.transcript_quality_risk,
-    JSON.stringify(record.transcript_quality_flags),
-    JSON.stringify(record.suggested_corrections),
-    JSON.stringify(record.corrections_applied),
-    `${unresolvedFlags.length}: ${unresolvedFlags.map((flag) => flag.reason).join("; ")}`,
-    record.translation_review_required ? "yes" : "no",
-    ...fieldConfidenceColumnsForRecord,
-    record.extraction_safety_status,
-    record.fields_reviewed_by_tester ? "yes" : "no",
-    record.demo_helper_used ? "yes" : "no",
-    record.recording_attempt_number,
-    record.rerecord_used ? "yes" : "no",
+function auditRowsForRecord(record: TestRecord) {
+  const effective = record.edited_extracted_json ?? record.extracted_json;
+  const needsQc = recordNeedsQc(record);
+  const shared = [
+    record.id,
+    record.client_id,
+    record.demo_record,
+    record.demo_dataset_version,
     record.created_at,
-    record.updated_at
+    record.outreach_session,
+    record.tester_id,
+    languagePackLabel(record),
+    record.deployment_site
   ];
+  const transcript = transcriptAvailability(record);
+  const trailing = [
+    recordingModeOf(record),
+    record.recording_status === "recorded",
+    record.recording_attempt_number,
+    record.rerecord_used,
+    transcript.transcript_available,
+    transcript.raw_transcript_present,
+    transcript.corrected_transcript_present,
+    true,
+    SYNC_STATUS_SLUGS[record.sync_status],
+    !needsQc
+  ];
+
+  return AUDIT_FIELD_KEYS.map((key) => {
+    const meta = effective.field_confidence?.[key];
+    const coverage = promptCoverage(record, key);
+    return [
+      ...shared,
+      key,
+      displayValue(meta?.value ?? ""),
+      meta ? FIELD_SOURCE_LABELS[meta.source] : "not_captured",
+      meta ? CONFIDENCE_NUMERIC[meta.confidence] : 0,
+      fieldStatus(record, meta),
+      meta?.evidence ?? "",
+      meta?.source === "manual",
+      meta?.requiresReview ?? false,
+      fieldQcReason(record, key),
+      PROMPT_STEP_LABELS[key],
+      coverage.viewed,
+      coverage.recorded,
+      ...trailing
+    ];
+  });
 }
 
 export function recordsToAuditCsv(records: TestRecord[]) {
-  const rows = records.map(auditRow);
+  const rows = records.flatMap(auditRowsForRecord);
   return [AUDIT_CSV_COLUMNS, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\n");
 }
 

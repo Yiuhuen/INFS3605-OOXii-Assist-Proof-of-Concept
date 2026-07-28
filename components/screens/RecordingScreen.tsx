@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent } from "react";
 import {
   AlertTriangle,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Flag,
-  HelpCircle,
   Mic,
   Pause,
   PencilLine,
@@ -18,6 +17,7 @@ import {
   VolumeX
 } from "lucide-react";
 import type { LanguageCode, ManualExtractedFields, PromptStep, RecordingStatus, TranscriptSegment, UnclearSegment } from "@/lib/types";
+import { LIVE_CAPTURED_FIELD_KEYS, LIVE_CAPTURED_FIELD_LABELS, type LiveCapturedFieldMap } from "@/lib/liveCapturedFields";
 import {
   Disclosure,
   FormField,
@@ -25,9 +25,11 @@ import {
   RecordButton,
   SecondaryButton,
   StatusBadge,
-  StepBadges,
+  StatusDot,
   TextAreaField,
-  WarningCard
+  TranscriptTab,
+  WarningCard,
+  type StatusDotTone
 } from "@/components/ui";
 import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
 import { buildClientSpokenPrompt, isSpeechSupported, speakPrompt, stopSpeaking, type SpeechSpeed } from "@/lib/speech";
@@ -62,29 +64,43 @@ function formatClock(isoTimestamp: string) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-const SWIPE_THRESHOLD_PX = 60;
-const SWIPE_DRAG_CLAMP_PX = 90;
-const INTERACTIVE_SELECTOR = "textarea, input, select, button, a, [role='button']";
+const DRAG_START_PX = 8;
+const HORIZONTAL_DOMINANCE_RATIO = 1.25;
+const SWIPE_TRIGGER_PX = 55;
+const SWIPE_DRAG_CLAMP_PX = 80;
+/**
+ * Only real input/media/editable controls block a gesture from starting —
+ * NOT buttons. "Play aloud" and "Why this matters" live inside the swipe
+ * card, and a fat-finger drag that happens to start on one of those chips
+ * must still swipe the prompt; see suppressNextClickRef below for how the
+ * resulting stray click on the button is neutralised instead.
+ */
+const NON_SWIPE_CONTROL_SELECTOR = "input, textarea, select, audio, video, [contenteditable='true']";
 
 /**
  * Pointer-based swipe gesture for the prompt card — touch, mouse, and pen all
  * go through the same Pointer Events path, so this works on mobile Chrome,
  * iOS Safari, and desktop drag without separate touch/mouse handlers.
  *
- * A gesture starting on an interactive child (buttons inside the card,
- * inputs elsewhere) never begins tracking, so it can't hijack a tap or a
- * text-field drag. The recording screen no longer scrolls vertically at all
- * (OneScreenShell), so there's no competing vertical gesture to guard
- * against here anymore — this hook only ever reacts to horizontal movement.
+ * A gesture starting on a real form/media control never begins tracking, so
+ * it can't hijack a text-field drag or a range slider. The recording screen
+ * no longer scrolls vertically at all (OneScreenShell), so there's no
+ * competing vertical gesture to guard against here anymore — this hook only
+ * ever reacts to horizontal movement, and leaves anything that stays
+ * vertical/diagonal alone so native `touch-action: pan-y` scrolling (where
+ * applicable) is never fought.
  */
 function useSwipeCard({
   onSwipeLeft,
   onSwipeRight,
-  disabled
+  disabled,
+  suppressNextClickRef
 }: {
   onSwipeLeft: () => void;
   onSwipeRight: () => void;
   disabled: boolean;
+  /** Set to true right when a real swipe fires, so the button under the finger can ignore the click event the browser still dispatches after pointerup. */
+  suppressNextClickRef: MutableRefObject<boolean>;
 }) {
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -99,9 +115,8 @@ function useSwipeCard({
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (disabled) return;
     const target = event.target as HTMLElement;
-    if (target.closest(INTERACTIVE_SELECTOR)) return;
+    if (target.closest(NON_SWIPE_CONTROL_SELECTOR)) return;
     gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY };
-    setDragging(true);
     // Without pointer capture, a finger that drifts slightly off the card
     // mid-drag (very easy on a real phone) stops delivering pointermove/up
     // to this element — the gesture silently dies, which reads as "swipe
@@ -118,9 +133,12 @@ function useSwipeCard({
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     const dx = event.clientX - gesture.startX;
     const dy = event.clientY - gesture.startY;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_START_PX) return;
     // Only follow the drag visually once the gesture is clearly horizontal —
-    // a vertical scroll never nudges the card sideways.
-    if (Math.abs(dx) > Math.abs(dy)) {
+    // a vertical scroll never nudges the card sideways, and never gets stuck
+    // half-dragged since dragX only updates on genuinely horizontal moves.
+    if (Math.abs(dx) > Math.abs(dy) * HORIZONTAL_DOMINANCE_RATIO) {
+      setDragging(true);
       setDragX(Math.max(-SWIPE_DRAG_CLAMP_PX, Math.min(SWIPE_DRAG_CLAMP_PX, dx)));
     }
   }
@@ -143,7 +161,10 @@ function useSwipeCard({
     const dx = event.clientX - gesture.startX;
     const dy = event.clientY - gesture.startY;
     reset();
-    if (Math.abs(dx) < SWIPE_THRESHOLD_PX || Math.abs(dx) <= Math.abs(dy)) return;
+    if (Math.abs(dx) < SWIPE_TRIGGER_PX || Math.abs(dx) <= Math.abs(dy) * HORIZONTAL_DOMINANCE_RATIO) return;
+    // A real swipe fired from inside the card — the browser still dispatches
+    // a click on whatever button sat under the finger; tell it to no-op.
+    suppressNextClickRef.current = true;
     if (dx < 0) onSwipeLeft();
     else onSwipeRight();
   }
@@ -153,6 +174,12 @@ function useSwipeCard({
     reset();
   }
 
+  function onLostPointerCapture(event: ReactPointerEvent<HTMLDivElement>) {
+    // Fires right after our own releasePointerCapture in onPointerUp/onPointerCancel too — only
+    // act if a gesture is still open (e.g. the OS/browser revoked capture without an up/cancel).
+    if (gestureRef.current?.pointerId === event.pointerId) reset();
+  }
+
   return {
     dragX,
     dragging,
@@ -160,7 +187,8 @@ function useSwipeCard({
       onPointerDown,
       onPointerMove,
       onPointerUp,
-      onPointerCancel
+      onPointerCancel,
+      onLostPointerCapture
     }
   };
 }
@@ -179,30 +207,35 @@ function ProgressDots({ total, current }: { total: number; current: number }) {
   );
 }
 
+/** Sentence-case step context line — "Step 2 of 4 · Right eye". Eye side stays because it is clinically load-bearing; the language pack is a setup-time choice and is not repeated on every card. */
+function stepContextLine(stepId: string, stepIndex: number, totalSteps: number) {
+  const eye = stepId === "right-distance" ? " · Right eye" : stepId === "left-distance" ? " · Left eye" : "";
+  return `Step ${stepIndex + 1} of ${totalSteps}${eye}`;
+}
+
 /**
- * Compact prompt panel — step context, the client-facing question, and the
- * tester note, with "Play aloud" and "Why this matters" as small chip
- * buttons rather than a full-height hero card. Prompt/instruction text is
- * line-clamped and clamp()-sized so a long clinical sentence still fits the
- * fixed height budget instead of growing the panel (and the whole screen)
- * past one viewport.
+ * Compact prompt panel — step context, the client-facing question, the
+ * one-line tester instruction, and "Play aloud". Nothing decorative: no
+ * emoji step icons, no repeated language badge, no training content ("Why
+ * this matters" lives in the collapsed prompt-guidance area below the main
+ * flow). Prompt/instruction text is line-clamped and clamp()-sized so a
+ * long clinical sentence still fits the fixed height budget.
  */
 function CompactPromptCard({
   step,
   stepIndex,
   totalSteps,
-  languageName,
   englishGloss,
   isSpeaking,
   isAudioMode,
   voiceInfoMessage,
   speechAvailable,
-  onPlayToggle
+  onPlayToggle,
+  suppressNextClickRef
 }: {
   step: PromptStep;
   stepIndex: number;
   totalSteps: number;
-  languageName: string;
   englishGloss?: string;
   isSpeaking: boolean;
   /** True when this step plays a pre-recorded audio file rather than browser TTS. */
@@ -210,25 +243,25 @@ function CompactPromptCard({
   voiceInfoMessage: string | null;
   speechAvailable: boolean;
   onPlayToggle: () => void;
+  /** Set by the swipe gesture the instant a real swipe fires — a drag that started on "Play aloud" must move the prompt, not also trigger the button underneath. */
+  suppressNextClickRef: MutableRefObject<boolean>;
 }) {
-  // Resets to closed every time the prompt changes (this component remounts
-  // on `key={step.id}` from the caller below) — "Why this matters" must
-  // never stay open across a swipe/Next and inflate the next card's height.
-  const [whyOpen, setWhyOpen] = useState(false);
+  /** Wraps a button's real tap handler so a click that immediately follows a successful swipe is a no-op instead of also firing the button. */
+  function guardedClick(action: () => void) {
+    return () => {
+      if (suppressNextClickRef.current) {
+        suppressNextClickRef.current = false;
+        return;
+      }
+      action();
+    };
+  }
 
   return (
     <div className="prompt-card-compact">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="status-pill">
-          Step {stepIndex + 1} of {totalSteps}
-        </span>
-        <StepBadges stepId={step.id} languageName={languageName} />
-      </div>
+      <p className="text-xs font-semibold text-field-muted">{stepContextLine(step.id, stepIndex, totalSteps)}</p>
 
-      <p className="text-prompt mt-1.5 line-clamp-4 font-black">
-        {step.icon && <span className="mr-1 text-base leading-none">{step.icon}</span>}
-        &ldquo;{step.client_prompt}&rdquo;
-      </p>
+      <p className="text-prompt mt-1.5 line-clamp-4 font-black">&ldquo;{step.client_prompt}&rdquo;</p>
       {englishGloss && <p className="mt-0.5 line-clamp-1 text-xs opacity-60">English: &ldquo;{englishGloss}&rdquo;</p>}
 
       <p className="mt-1 line-clamp-2 text-xs opacity-80">
@@ -239,77 +272,64 @@ function CompactPromptCard({
         <button
           type="button"
           className="chip-button"
-          onClick={onPlayToggle}
+          onClick={guardedClick(onPlayToggle)}
           disabled={!speechAvailable}
           title={speechAvailable ? undefined : "Speech playback unavailable on this device"}
         >
           {isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
           {isSpeaking ? "Stop speaking" : "Play aloud"}
         </button>
-        {isSpeaking && <StatusBadge label={isAudioMode ? "Recorded audio" : "Speaking…"} tone="warn" />}
-        <button type="button" className={`chip-button ${whyOpen ? "is-active" : ""}`} onClick={() => setWhyOpen((value) => !value)} aria-expanded={whyOpen}>
-          <HelpCircle className="h-3.5 w-3.5" />
-          Why this matters
-        </button>
+        {isSpeaking && <span className="text-[11px] font-semibold opacity-70">{isAudioMode ? "Playing recorded audio" : "Speaking…"}</span>}
       </div>
       {voiceInfoMessage && <p className="mt-1 line-clamp-1 text-[11px] opacity-50">{voiceInfoMessage}.</p>}
-      {whyOpen && <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed opacity-70">{step.why_this_matters}</p>}
     </div>
   );
 }
 
-type TranscriptPanelStatus = { label: string; tone: "neutral" | "warn" | "good" | "danger" };
-
 /**
- * Priority-ordered status the tester sees above the transcript box. Mirrors
- * the actual data (segments/interimText) plus the underlying engine's
- * lifecycle (transcriptEngineStatus) so "nothing here yet" always reads as
- * either "still listening" or an honest failure — never a dead placeholder.
+ * One-line status for the collapsed transcript tab's subtitle. Mirrors the
+ * actual data (segments/interimText) plus the underlying engine's lifecycle
+ * (transcriptEngineStatus) so "nothing here yet" always reads as either
+ * "still listening" or an honest failure — never a dead placeholder.
  */
-function deriveTranscriptPanelStatus({
+function deriveTranscriptSubtitle({
+  transcriptUnavailable,
   recording,
   paused,
   recordingStatus,
-  segments,
+  finalLineCount,
   interimText,
   engineStatus
 }: {
+  transcriptUnavailable: boolean;
   recording: boolean;
   paused: boolean;
   recordingStatus: RecordingStatus;
-  segments: TranscriptSegment[];
+  finalLineCount: number;
   interimText: string;
   engineStatus: TranscriptEngineStatus;
-}): TranscriptPanelStatus {
+}): string {
+  if (transcriptUnavailable) return "Transcript unavailable — manual entry available";
+  if (finalLineCount > 0) return `${finalLineCount} line${finalLineCount === 1 ? "" : "s"} captured`;
   const stopped = !recording && !paused;
-  if (stopped && recordingStatus === "recorded" && segments.length > 0) {
-    return { label: "Transcript ready for review", tone: "good" };
-  }
-  if (stopped && recordingStatus === "recorded" && segments.length === 0) {
-    return { label: "No transcript captured", tone: "warn" };
-  }
-  if (interimText) {
-    return { label: "Transcript updating…", tone: "neutral" };
-  }
-  if (recording && segments.length === 0) {
-    return { label: "Listening…", tone: "neutral" };
-  }
-  if (engineStatus === "restarting") {
-    return { label: "Reconnecting…", tone: "warn" };
-  }
-  if (paused) {
-    return { label: "Paused", tone: "neutral" };
-  }
-  return { label: "Listening…", tone: "neutral" };
+  if (stopped && recordingStatus === "recorded") return "No transcript captured — manual entry available";
+  if (interimText) return "Listening…";
+  if (engineStatus === "restarting") return "Reconnecting…";
+  if (paused) return "Paused";
+  return "Listening…";
 }
 
 /**
- * "Live transcript" is a helper only — a growing draft of what was heard,
- * never the source record. The audio recording and/or manual notes remain
- * valid on their own, and any unclear segment still needs a human to
- * confirm it during QC review before export.
+ * Live transcript as a collapsed-by-default tab — supporting evidence, never
+ * the main workflow. Collapsed: subtitle ("3 lines captured") plus the latest
+ * line only. Expanded: recent lines in an internally-scrolling panel capped
+ * in height, so the recording screen never becomes a transcript scroll.
+ * Expansion state lives in the parent and touches nothing else — recording,
+ * timer, STT, prompt markers, and captured fields are all upstream state.
  */
-function LiveTranscriptPanel({
+function LiveTranscriptTab({
+  expanded,
+  onToggle,
   segments,
   interimText,
   transcriptUnavailable,
@@ -322,6 +342,8 @@ function LiveTranscriptPanel({
   manualTranscriptNote,
   onManualTranscriptNoteChange
 }: {
+  expanded: boolean;
+  onToggle: () => void;
   segments: TranscriptSegment[];
   interimText: string;
   transcriptUnavailable: boolean;
@@ -334,21 +356,25 @@ function LiveTranscriptPanel({
   manualTranscriptNote: string;
   onManualTranscriptNoteChange: (value: string) => void;
 }) {
-  const audioRecordedNoSegments = !recording && !paused && recordingStatus === "recorded" && segments.length === 0 && !transcriptUnavailable;
-  const status = deriveTranscriptPanelStatus({ recording, paused, recordingStatus, segments, interimText, engineStatus });
+  const finalSegments = segments.filter((segment) => segment.isFinal && segment.text.trim());
+  const audioRecordedNoSegments = !recording && !paused && recordingStatus === "recorded" && finalSegments.length === 0 && !transcriptUnavailable;
+  const manualEntryNeeded = transcriptUnavailable || audioRecordedNoSegments;
   const unavailableMessage =
     transcriptUnavailableReason === "language"
       ? "Not available for this language in the PoC. Audio is still saved."
       : "Unavailable in this browser. Audio is still saved.";
   const [manualOpen, setManualOpen] = useState(false);
 
-  // Compact by design: this strip is a live draft glance, not the archive —
-  // only the single most recent line is shown so it never grows past its
-  // fixed height budget. The full transcript (every segment, in order) is
-  // always available afterwards on Transcript Review.
-  const RECENT_LINE_COUNT = 1;
-  const recentSegments = segments.slice(-RECENT_LINE_COUNT);
-  const olderSegmentCount = segments.length - recentSegments.length;
+  const subtitle = deriveTranscriptSubtitle({
+    transcriptUnavailable,
+    recording,
+    paused,
+    recordingStatus,
+    finalLineCount: finalSegments.length,
+    interimText,
+    engineStatus
+  });
+  const latestSegment = finalSegments[finalSegments.length - 1];
 
   function manualEntryToggleOrField(placeholder: string) {
     if (manualOpen) {
@@ -371,60 +397,103 @@ function LiveTranscriptPanel({
   }
 
   return (
-    <div className="field-card flex h-full min-h-0 flex-col overflow-hidden p-2.5">
-      <div className="flex shrink-0 items-center justify-between">
-        <p className="flex items-center gap-1.5 text-xs font-bold">
-          <span className="relative flex h-2 w-2 shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--gold)] opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--gold)]" />
-          </span>
-          Live transcript
-        </p>
-        <StatusBadge label={status.label} tone={status.tone} />
-      </div>
-
-      {transcriptUnavailable ? (
-        <div className="mt-1.5 min-h-0 flex-1 space-y-1.5 overflow-hidden">
-          <WarningCard>{unavailableMessage}</WarningCard>
-          {manualEntryToggleOrField("Type what the client said, since live transcript isn't available.")}
-        </div>
-      ) : (
-        <div className="ink-panel mt-1.5 min-h-0 flex-1 overflow-hidden p-2 text-sm">
-          {olderSegmentCount > 0 && (
-            <p className="line-clamp-1 text-[11px] opacity-50">
-              +{olderSegmentCount} earlier line{olderSegmentCount === 1 ? "" : "s"} — full transcript on the next screen.
+    <div>
+      <TranscriptTab
+        subtitle={subtitle}
+        expanded={expanded}
+        onToggle={onToggle}
+        maxHeightClass="max-h-44"
+        collapsedPreview={
+          interimText || latestSegment ? (
+            <p className={`line-clamp-2 text-sm leading-snug ${interimText && !latestSegment ? "italic opacity-60" : "opacity-90"}`}>
+              {interimText && !latestSegment ? interimText : latestSegment?.text}
             </p>
-          )}
-          {segments.length === 0 && !interimText && !audioRecordedNoSegments && (
-            <p className="line-clamp-2 opacity-60">Listening for speech — text will appear here as the client talks.</p>
-          )}
-          {recentSegments.map((segment) => (
-            <p key={segment.id} className="line-clamp-2 leading-snug">
+          ) : undefined
+        }
+      >
+        {finalSegments.length === 0 && !interimText && !manualEntryNeeded && (
+          <p className="text-sm opacity-60">Listening for speech — text will appear here as the client talks.</p>
+        )}
+        <div className="space-y-1 text-sm">
+          {finalSegments.map((segment) => (
+            <p key={segment.id} className="leading-snug">
               <span className="mr-1.5 text-[11px] font-bold tabular-nums opacity-50">{formatClock(segment.timestamp)}</span>
-              <span className="mr-1.5 text-[11px] font-semibold uppercase tracking-wide opacity-40">{stepTitle(segment.stepId)}</span>
+              <span className="mr-1.5 text-[11px] font-semibold opacity-40">{stepTitle(segment.stepId)}</span>
               {segment.text}
             </p>
           ))}
           {interimText && (
-            <p className="line-clamp-2 italic leading-snug opacity-60">
+            <p className="italic leading-snug opacity-60">
               <span className="mr-1.5 text-[11px] font-bold tabular-nums opacity-50">…</span>
               {interimText}
             </p>
           )}
         </div>
-      )}
+        <p className="mt-2 text-[11px] opacity-60">
+          Draft only — review required.
+          {unclearSegments.length > 0 && ` ${unclearSegments.length} unclear — needs QC.`}
+        </p>
+      </TranscriptTab>
 
-      {audioRecordedNoSegments && (
-        <div className="mt-1.5 shrink-0 space-y-1.5">
-          <WarningCard>No live transcript captured. Add a manual transcript or send to QC.</WarningCard>
-          {manualEntryToggleOrField("Type what the client said, since live transcript wasn't captured.")}
+      {/* Manual fallback stays reachable without expanding the tab — losing
+          the transcript is exactly when the tester needs this most. */}
+      {manualEntryNeeded && (
+        <div className="mt-1.5 space-y-1.5">
+          <WarningCard>
+            {transcriptUnavailable ? unavailableMessage : "No live transcript captured. Add a manual transcript or send to QC."}
+          </WarningCard>
+          {manualEntryToggleOrField("Type what the client said, since live transcript isn't available.")}
         </div>
       )}
+    </div>
+  );
+}
 
-      <p className="mt-1 shrink-0 line-clamp-1 text-[11px] opacity-60">
-        Draft only — review required.
-        {unclearSegments.length > 0 && ` ${unclearSegments.length} unclear — needs QC.`}
-      </p>
+/**
+ * Progressive auto-fill glance — all 7 key fields are always listed, each
+ * with its live status (Captured / Missing / Check), so the tester can see
+ * at a glance what the app still hasn't heard yet instead of only being
+ * told about fields that already landed. Updates while recording is still
+ * running, from whatever the live transcript (interim + final) has picked
+ * up so far — see lib/liveCapturedFields.ts for the extraction pipeline this
+ * renders. Rendered as a compact two-column dot grid rather than a
+ * scrolling pill strip — no badge wall, values shown only when captured,
+ * readable down to 320px. Deliberately draft-only: no evidence blocks, no
+ * editing, nothing marked final — that happens on Review captured fields.
+ */
+function CapturedSoFarPanel({ liveFields }: { liveFields: LiveCapturedFieldMap | null }) {
+  const capturedCount = liveFields ? LIVE_CAPTURED_FIELD_KEYS.filter((key) => liveFields[key].status !== "Missing").length : 0;
+
+  return (
+    <div className="shrink-0 rounded-xl border border-field-line bg-field-card px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-bold leading-snug">Captured so far</p>
+        <span className="text-[11px] font-semibold opacity-60">
+          {capturedCount} of {LIVE_CAPTURED_FIELD_KEYS.length}
+        </span>
+      </div>
+      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+        {LIVE_CAPTURED_FIELD_KEYS.map((key, index) => {
+          const field = liveFields?.[key];
+          const status = field?.status ?? "Missing";
+          const label = LIVE_CAPTURED_FIELD_LABELS[key];
+          const tone: StatusDotTone = status === "Captured" ? "good" : status === "Check" ? "warn" : "muted";
+          // The odd 7th row ("Glasses selected", also the longest label) takes
+          // the full width so it never truncates at 320/375px.
+          const isLastOdd = index === LIVE_CAPTURED_FIELD_KEYS.length - 1 && LIVE_CAPTURED_FIELD_KEYS.length % 2 === 1;
+          return (
+            <span
+              key={key}
+              className={`status-dot min-w-0 text-[11px] ${isLastOdd ? "col-span-2" : ""} ${tone === "good" ? "is-good" : tone === "warn" ? "is-warn" : "is-muted"}`}
+            >
+              <span className="truncate">
+                {label}
+                {status === "Missing" ? " · Missing" : `: ${field?.value}${status === "Check" ? " · Check" : ""}`}
+              </span>
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -635,7 +704,6 @@ export function RecordingScreen({
   step,
   stepIndex,
   totalSteps,
-  languageName,
   languageCode,
   speechSpeed,
   englishGloss,
@@ -654,6 +722,7 @@ export function RecordingScreen({
   nudgeVisible,
   canFinish,
   transcriptSegments,
+  liveFields,
   interimText,
   transcriptUnavailable,
   transcriptUnavailableReason,
@@ -693,7 +762,6 @@ export function RecordingScreen({
   step: PromptStep;
   stepIndex: number;
   totalSteps: number;
-  languageName: string;
   languageCode: LanguageCode;
   speechSpeed: SpeechSpeed;
   englishGloss?: string;
@@ -713,6 +781,8 @@ export function RecordingScreen({
   /** Gates only the "Finish & review transcript" action — prompt navigation (swipe/Prev/Next/arrow keys) is always allowed so the tester can browse cards freely while recording continues underneath. */
   canFinish: boolean;
   transcriptSegments: TranscriptSegment[];
+  /** Progressive draft extraction from the live transcript so far (spec §7) — draft only, null until something has been captured. */
+  liveFields: LiveCapturedFieldMap | null;
   interimText: string;
   transcriptUnavailable: boolean;
   transcriptUnavailableReason: "browser" | "language" | null;
@@ -810,6 +880,9 @@ export function RecordingScreen({
     return () => stopSpeaking();
   }, []);
 
+  /** Transcript tab expand/collapse — pure presentation state; recording, timer, STT, prompt markers, and captured fields all live upstream in app/page.tsx and are untouched by toggling. */
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+
   const [edgeMessage, setEdgeMessage] = useState<string | null>(null);
   const edgeMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Rapid successive swipes/taps/key presses share this lock so a burst of
@@ -857,10 +930,12 @@ export function RecordingScreen({
   // Manual-fallback panel open → swipe is disabled outright (the tester's
   // thumb is busy typing right above the card). Keyboard arrows are guarded
   // separately below by focus, which already covers "typing in a field".
+  const suppressNextClickRef = useRef(false);
   const { dragX, dragging, handlers: swipeHandlers } = useSwipeCard({
     onSwipeLeft: attemptNext,
     onSwipeRight: attemptPrevious,
-    disabled: showOverrideInput
+    disabled: showOverrideInput,
+    suppressNextClickRef
   });
 
   useEffect(() => {
@@ -882,52 +957,123 @@ export function RecordingScreen({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [attemptNext, attemptPrevious]);
 
+  // One-line note shown under the recording button row — nudge takes
+  // priority (safety-relevant: don't ask the question before recording
+  // starts), then offline/playback status. Rendered only when there's
+  // something to say, so the persistent dock stays as short as possible by
+  // default instead of always reserving a blank line for it.
+  const recordingNote = nudgeVisible
+    ? "nudge"
+    : !isOnline
+      ? "offline"
+      : recordingStatus === "recorded" && !recording && !micError
+        ? "playback"
+        : null;
+
   return (
     <OneScreenShell
       header={<CompactHeader title="Record" subtitle={clientId} onBack={onBack} isOnline={isOnline} />}
       footer={
-        <BottomActionBar>
-          <SecondaryButton
-            className="min-h-[2.75rem] shrink-0 whitespace-nowrap px-3.5 py-2.5 text-sm"
-            icon={<AlertTriangle className="h-4 w-4" />}
-            onClick={onMarkUnclear}
-            disabled={!canMarkUnclear}
-          >
-            Mark unclear
-          </SecondaryButton>
-          <PrimaryButton
-            fullWidth
-            className="min-h-[2.75rem] flex-1 py-2.5 text-sm"
-            disabled={!canFinish}
-            icon={<Flag className="h-4 w-4" />}
-            onClick={handleFinish}
-          >
-            Finish &amp; review
-          </PrimaryButton>
+        // Persistent control dock (spec: recording controls must never be
+        // scrollable-away) — everything here lives in OneScreenShell's
+        // `footer` grid row, which sits outside the content column's own
+        // `overflow-y-auto` entirely. That's a plain CSS grid row, not
+        // `position: sticky`, so it can't be defeated by an `overflow-hidden`
+        // ancestor or a transformed sibling (the swipe card uses an inline
+        // `transform`, which only affects its own descendants). Recording
+        // status/timer/Start-Stop and Mark unclear/Finish & review are now
+        // one always-visible unit instead of two.
+        <BottomActionBar className="flex-col items-stretch gap-2">
+          <div className="flex items-center justify-between">
+            <StatusDot label={recordingLabel} tone={recordingTone} />
+            <span className="text-xl font-black tabular-nums">{formatElapsed(elapsedSeconds)}</span>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {!recordingEverStarted && (
+              <RecordButton fullWidth className="min-h-[2.75rem] px-4 py-2 text-sm" icon={<Mic className="h-4 w-4" />} onClick={startRecording}>
+                Start recording
+              </RecordButton>
+            )}
+            {recording && !paused && (
+              <SecondaryButton className="min-h-[2.75rem] px-3.5 py-1.5 text-sm" icon={<Pause className="h-4 w-4" />} onClick={pauseRecording}>
+                Pause
+              </SecondaryButton>
+            )}
+            {recording && paused && (
+              <SecondaryButton className="min-h-[2.75rem] px-3.5 py-1.5 text-sm" icon={<Play className="h-4 w-4" />} onClick={resumeRecording}>
+                Resume
+              </SecondaryButton>
+            )}
+            {recording && (
+              <SecondaryButton className="min-h-[2.75rem] px-3.5 py-1.5 text-sm" icon={<Square className="h-4 w-4" />} onClick={handleStopRecording}>
+                Stop
+              </SecondaryButton>
+            )}
+            {!recording && recordingStatus === "recorded" && (
+              <SecondaryButton className="min-h-[2.75rem] px-3.5 py-1.5 text-sm" icon={<RotateCcw className="h-4 w-4" />} onClick={onRerecordRequest}>
+                Rerecord
+              </SecondaryButton>
+            )}
+          </div>
+
+          {recordingNote && (
+            <p className="line-clamp-1 text-[11px] opacity-60">
+              {recordingNote === "nudge" ? (
+                <span className="flex items-center gap-1.5 font-semibold text-[var(--warn)]">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  Start recording before asking the question.
+                </span>
+              ) : recordingNote === "offline" ? (
+                "Works fully offline — processes after sync."
+              ) : (
+                "Playback available after Finish & review."
+              )}
+            </p>
+          )}
+
+          <div className="flex items-center gap-2 border-t border-field-line pt-2">
+            <SecondaryButton
+              className="min-h-[2.75rem] shrink-0 whitespace-nowrap px-3.5 py-2.5 text-sm"
+              icon={<AlertTriangle className="h-4 w-4" />}
+              onClick={onMarkUnclear}
+              disabled={!canMarkUnclear}
+            >
+              Mark unclear
+            </SecondaryButton>
+            <PrimaryButton
+              fullWidth
+              className="min-h-[2.75rem] flex-1 py-2.5 text-sm"
+              disabled={!canFinish}
+              icon={<Flag className="h-4 w-4" />}
+              onClick={handleFinish}
+            >
+              Finish &amp; review
+            </PrimaryButton>
+          </div>
         </BottomActionBar>
       }
     >
       <div className="flex h-full min-h-0 flex-col gap-1.5 overflow-y-auto">
-        {/* 1. Prompt panel — swipe left/right navigates prompts; recording/timer/transcript state is untouched by navigation. */}
+        {/* 1. Prompt panel — swipe left/right navigates prompts; recording/timer/transcript state is untouched by navigation. Covers the whole card (prompt text, tester instruction, eye/language badges, why-this-matters, background) — not just a thin inner strip. */}
         <div
           {...swipeHandlers}
-          className="shrink-0"
+          className="shrink-0 cursor-grab select-none active:cursor-grabbing"
           style={{ touchAction: "pan-y", transform: `translateX(${dragX}px)`, transition: dragging ? "none" : "transform 200ms ease" }}
         >
           <CompactPromptCard
-            // Remounts on every prompt change so local "Why this matters"
-            // open/closed state always starts fresh.
+            // Remounts on every prompt change so any transient per-card state always starts fresh.
             key={step.id}
             step={step}
             stepIndex={stepIndex}
             totalSteps={totalSteps}
-            languageName={languageName}
             englishGloss={englishGloss}
             isSpeaking={isSpeaking}
             isAudioMode={isAudioMode}
             voiceInfoMessage={voiceInfoMessage}
             speechAvailable={speechAvailable}
             onPlayToggle={handlePlayToggle}
+            suppressNextClickRef={suppressNextClickRef}
           />
         </div>
 
@@ -950,62 +1096,23 @@ export function RecordingScreen({
           </div>
         )}
 
-        {/* 2. Recording control strip */}
-        <div className="field-card shrink-0 p-2.5">
-          <div className="flex items-center justify-between">
-            <StatusBadge label={recordingLabel} tone={recordingTone} />
-            <span className="text-xl font-black tabular-nums">{formatElapsed(elapsedSeconds)}</span>
-          </div>
+        {/* Recording status, timer, and Start/Stop now live in the persistent footer dock below, so they cannot be scrolled out of view. */}
 
-          <div className="mt-2 flex flex-wrap gap-2">
-            {!recordingEverStarted && (
-              <RecordButton fullWidth className="px-4 py-2 text-sm" icon={<Mic className="h-4 w-4" />} onClick={startRecording}>
-                Start recording
-              </RecordButton>
-            )}
-            {recording && !paused && (
-              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<Pause className="h-4 w-4" />} onClick={pauseRecording}>
-                Pause
-              </SecondaryButton>
-            )}
-            {recording && paused && (
-              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<Play className="h-4 w-4" />} onClick={resumeRecording}>
-                Resume
-              </SecondaryButton>
-            )}
-            {recording && (
-              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<Square className="h-4 w-4" />} onClick={handleStopRecording}>
-                Stop
-              </SecondaryButton>
-            )}
-            {!recording && recordingStatus === "recorded" && (
-              <SecondaryButton className="px-3.5 py-1.5 text-sm" icon={<RotateCcw className="h-4 w-4" />} onClick={onRerecordRequest}>
-                Rerecord
-              </SecondaryButton>
-            )}
-          </div>
+        {/* 3. Captured so far — the main workflow. Always lists all 7 fields
+            (all "Missing" until the live transcript fills them), sits above
+            and more prominent than the transcript. Shown even when the mic
+            has failed: that's exactly when the tester falls back to the
+            "Cannot record?" manual note below, and this panel is the only
+            feedback that manual text is actually being picked up live. */}
+        <CapturedSoFarPanel liveFields={liveFields} />
 
-          {/* One compact note max, fixed one-line height — never stack the nudge, offline, and playback hints together. */}
-          <p className="mt-1.5 line-clamp-1 text-[11px] opacity-60">
-            {nudgeVisible ? (
-              <span className="flex items-center gap-1.5 font-semibold text-[var(--warn)]">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                Start recording before asking the question.
-              </span>
-            ) : !isOnline ? (
-              "Works fully offline — processes after sync."
-            ) : recordingStatus === "recorded" && !recording && !micError ? (
-              "Playback available after Finish & review."
-            ) : (
-              " "
-            )}
-          </p>
-        </div>
-
-        {/* 3. Live transcript strip — absorbs remaining space; internal content is line-clamped so it never needs its own scrollbar. */}
+        {/* 4. Transcript — supporting evidence, collapsed by default. Expanding
+            only reveals already-held data; recording/timer/STT are untouched. */}
         {recordingEverStarted && !micError && (
-          <div className="min-h-[5.5rem] flex-1 overflow-hidden">
-            <LiveTranscriptPanel
+          <div className="shrink-0">
+            <LiveTranscriptTab
+              expanded={transcriptExpanded}
+              onToggle={() => setTranscriptExpanded((value) => !value)}
               segments={transcriptSegments}
               interimText={interimText}
               transcriptUnavailable={transcriptUnavailable}
@@ -1056,6 +1163,15 @@ export function RecordingScreen({
             area on this screen besides diagnostics: collapsed header takes no
             extra space, and once opened its fields scroll internally within
             whatever room is left rather than growing the outer page. */}
+        {/* Collapsed help — the training-refresh content that used to sit on
+            the prompt card. Outside the main recording flow on purpose; the
+            full version lives in Training. */}
+        <div className="shrink-0">
+          <Disclosure label="Why this prompt matters">
+            <p className="text-xs leading-relaxed opacity-70">{step.why_this_matters}</p>
+          </Disclosure>
+        </div>
+
         <div className="shrink-0">
           <button
             className="flex w-full items-center justify-between rounded-xl border border-field-line bg-field-card px-3 py-2 text-left text-sm font-semibold"

@@ -1,5 +1,5 @@
-import { REQUIRED_EXTRACTED_FIELDS, UNKNOWN_FIELD_VALUE, type ExtractedFields, type LanguageCode, type TestRecord } from "./types";
-import { hasUnclearSegments, usedManualOverride } from "./qc";
+import { REQUIRED_EXTRACTED_FIELDS, UNKNOWN_FIELD_VALUE, type ExtractedFields, type LanguageCode, type ManualExtractedFields, type TestRecord } from "./types";
+import { hasUnclearSegments, recordNeedsQc, usedManualOverride } from "./qc";
 
 /**
  * ---------------------------------------------------------------------------
@@ -73,6 +73,10 @@ export interface InsightsSummary {
   failedSyncCount: number;
   unclearSegmentRecordCount: number;
   manualOverrideCount: number;
+  /** Records where one or more prompt cards were never viewed, or were viewed but never captured in audio — a process issue, not a data-quality one. */
+  promptCoverageIncompleteCount: number;
+  /** Records where Rerecord was used at least once and the final saved attempt did not need QC — evidence the feature works as a low-risk correction path. */
+  rerecordImprovedCount: number;
   fieldGaps: FieldGapInsight[];
   bySite: GroupInsight[];
   byLanguage: GroupInsight[];
@@ -103,7 +107,8 @@ function groupBy(records: TestRecord[], keyOf: (record: TestRecord) => string): 
     .sort((a, b) => b.totalRecords - a.totalRecords);
 }
 
-const LANGUAGE_LABELS: Record<LanguageCode, string> = { en: "English", tpi: "Tok Pisin", bis: "Bislama" };
+/** Shared display names for the app's 3 real language packs — also used by lib/csv.ts so exports and Insights never label a language differently. */
+export const LANGUAGE_LABELS: Record<LanguageCode, string> = { en: "English", tpi: "Tok Pisin", bis: "Bislama" };
 
 const PRIORITY_RANK: Record<InsightPriority, number> = { High: 0, Medium: 1, Low: 2 };
 
@@ -125,6 +130,24 @@ function findMostRepeatedValue(records: TestRecord[], field: keyof ExtractedFiel
   return best && total > 0 ? { ...best, total } : null;
 }
 
+/**
+ * Records where a high-risk field either was never captured, or was
+ * specifically manually corrected (not merely part of a whole-record manual
+ * override, which the dedicated manual-override insight already covers) —
+ * "needs review" in the operational sense, not just "missing". Used for the
+ * dedicated cataract-history/glasses-selected insight cards below so they
+ * count the same records the OOXii Data Longlist's qc_reason_summary flags.
+ */
+function highRiskFieldReviewCount(records: TestRecord[], key: keyof ManualExtractedFields): number {
+  return records.filter((record) => {
+    const effective = record.edited_extracted_json ?? record.extracted_json;
+    const meta = effective.field_confidence?.[key];
+    if (!meta) return false;
+    if (!meta.value.trim()) return true;
+    return meta.source === "manual" && record.recording_status !== "manual_override";
+  }).length;
+}
+
 function buildInsights(records: TestRecord[], stats: {
   needsQcCount: number;
   needsQcRate: number;
@@ -134,6 +157,10 @@ function buildInsights(records: TestRecord[], stats: {
   manualOverrideCount: number;
   editedCount: number;
   fieldGaps: FieldGapInsight[];
+  promptCoverageIncompleteCount: number;
+  rerecordImprovedCount: number;
+  cataractReviewCount: number;
+  glassesReviewCount: number;
 }): ActionableInsight[] {
   const totalRecords = records.length;
   const insights: ActionableInsight[] = [];
@@ -143,7 +170,7 @@ function buildInsights(records: TestRecord[], stats: {
       id: "needs-qc",
       title: `${stats.needsQcCount} record${stats.needsQcCount === 1 ? "" : "s"} need${stats.needsQcCount === 1 ? "s" : ""} QC before export`,
       evidence: `${stats.needsQcCount} of ${totalRecords} saved records (${pct(stats.needsQcRate)}) are flagged for QC review.`,
-      action: "Open QC Review and resolve flagged records before exporting.",
+      action: "Review flagged records before using the operational export.",
       priority: stats.needsQcRate > 0.5 ? "High" : stats.needsQcRate > 0.2 ? "Medium" : "Low",
       targetPage: "QC"
     });
@@ -165,23 +192,54 @@ function buildInsights(records: TestRecord[], stats: {
       id: "pending-sync",
       title: `${stats.pendingSyncCount} record${stats.pendingSyncCount === 1 ? "" : "s"} pending sync`,
       evidence: `${stats.pendingSyncCount} of ${totalRecords} records are saved locally but not yet synced.`,
-      action: "Reconnect and let pending records sync before relying on the cloud copy.",
+      action: "Sync when internet is available before central reporting.",
       priority: rate(stats.pendingSyncCount, totalRecords) > 0.5 ? "High" : "Medium",
       targetPage: "Export"
     });
   }
 
-  stats.fieldGaps.slice(0, 3).forEach((gap) => {
-    const label = SHORT_FIELD_LABELS[gap.field] ?? gap.label;
+  // Cataract history and glasses selected/dispensed get their own dedicated
+  // cards (below) with specific, curated recommendations — they're excluded
+  // here so the generic top-3 field-gap loop only covers OTHER fields.
+  const DEDICATED_FIELD_INSIGHTS = new Set(["cataract_history_confirmed", "glasses_selected"]);
+  stats.fieldGaps
+    .filter((gap) => !DEDICATED_FIELD_INSIGHTS.has(gap.field))
+    .slice(0, 3)
+    .forEach((gap) => {
+      const label = SHORT_FIELD_LABELS[gap.field] ?? gap.label;
+      insights.push({
+        id: `missing-${gap.field}`,
+        title: `${label} missing in ${gap.missingCount} record${gap.missingCount === 1 ? "" : "s"}`,
+        evidence: `${pct(gap.missingRate)} of records are missing "${gap.label}".`,
+        action: `Review and fill "${gap.label}" during QC, or refresh tester training on that prompt step.`,
+        priority: gap.missingRate > 0.4 ? "High" : gap.missingRate > 0.15 ? "Medium" : "Low",
+        targetPage: "QC"
+      });
+    });
+
+  if (stats.cataractReviewCount > 0) {
+    const cataractRate = rate(stats.cataractReviewCount, totalRecords);
     insights.push({
-      id: `missing-${gap.field}`,
-      title: `${label} missing in ${gap.missingCount} record${gap.missingCount === 1 ? "" : "s"}`,
-      evidence: `${pct(gap.missingRate)} of records are missing "${gap.label}".`,
-      action: `Review and fill "${gap.label}" during QC, or refresh tester training on that prompt step.`,
-      priority: gap.missingRate > 0.4 ? "High" : gap.missingRate > 0.15 ? "Medium" : "Low",
+      id: "cataract-history-gap",
+      title: `Cataract history missing in ${stats.cataractReviewCount} record${stats.cataractReviewCount === 1 ? "" : "s"}`,
+      evidence: `${pct(cataractRate)} of records are missing "Cataract history confirmed".`,
+      action: "Refresh tester training on the cataract history prompt before the next outreach session.",
+      priority: cataractRate > 0.4 ? "High" : cataractRate > 0.15 ? "Medium" : "Low",
       targetPage: "QC"
     });
-  });
+  }
+
+  if (stats.glassesReviewCount > 0) {
+    const glassesRate = rate(stats.glassesReviewCount, totalRecords);
+    insights.push({
+      id: "glasses-selected-gap",
+      title: `Glasses selected / dispensed needs review in ${stats.glassesReviewCount} record${stats.glassesReviewCount === 1 ? "" : "s"}`,
+      evidence: `${pct(glassesRate)} of records have "Glasses selected / dispensed" missing or manually entered.`,
+      action: "Review dispensing fields before export; consider making this prompt more explicit.",
+      priority: glassesRate > 0.4 ? "High" : glassesRate > 0.15 ? "Medium" : "Low",
+      targetPage: "QC"
+    });
+  }
 
   if (stats.unclearSegmentRecordCount > 0) {
     insights.push({
@@ -200,7 +258,7 @@ function buildInsights(records: TestRecord[], stats: {
       id: "manual-override",
       title: `${stats.manualOverrideCount} record${stats.manualOverrideCount === 1 ? "" : "s"} used manual override`,
       evidence: `${stats.manualOverrideCount} of ${totalRecords} records (${pct(overrideRate)}) relied on a manual override instead of a captured recording.`,
-      action: "Check microphone access and refresh tester training on continuous recording.",
+      action: "Check microphone permissions and device readiness before field deployment.",
       priority: overrideRate > 0.4 ? "High" : overrideRate > 0.15 ? "Medium" : "Low",
       targetPage: "Record"
     });
@@ -214,6 +272,28 @@ function buildInsights(records: TestRecord[], stats: {
       action: "Confirm each edited field is correct in QC Review.",
       priority: rate(stats.editedCount, totalRecords) > 0.4 ? "High" : "Medium",
       targetPage: "QC"
+    });
+  }
+
+  if (stats.promptCoverageIncompleteCount > 0) {
+    insights.push({
+      id: "prompt-coverage",
+      title: `Prompt coverage incomplete in ${stats.promptCoverageIncompleteCount} record${stats.promptCoverageIncompleteCount === 1 ? "" : "s"}`,
+      evidence: `${stats.promptCoverageIncompleteCount} of ${totalRecords} records have one or more prompt steps that were never viewed, or were viewed but not captured in audio.`,
+      action: "Confirm testers swipe through every required prompt before finishing the test.",
+      priority: rate(stats.promptCoverageIncompleteCount, totalRecords) > 0.3 ? "High" : "Medium",
+      targetPage: "QC"
+    });
+  }
+
+  if (stats.rerecordImprovedCount > 0) {
+    insights.push({
+      id: "rerecord-improved",
+      title: `Re-record improved ${stats.rerecordImprovedCount} record${stats.rerecordImprovedCount === 1 ? "" : "s"}`,
+      evidence: `${stats.rerecordImprovedCount} of ${totalRecords} records used Rerecord at least once, and the final saved attempt did not need QC.`,
+      action: "Keep rerecord available as a low-risk correction option when the first capture is poor.",
+      priority: "Low",
+      targetPage: "Record"
     });
   }
 
@@ -264,7 +344,7 @@ function buildInsights(records: TestRecord[], stats: {
       id: "all-clear",
       title: "No urgent issues detected",
       evidence: "All saved records look healthy across QC, sync, and field completeness.",
-      action: "Continue testing as normal — records look ready to export.",
+      action: "Continue testing as normal — records look ready for export.",
       priority: "Low",
       targetPage: "Export"
     });
@@ -282,6 +362,10 @@ export function computeInsights(records: TestRecord[]): InsightsSummary {
   const failedSyncCount = records.filter((record) => record.sync_status === "Failed").length;
   const unclearSegmentRecordCount = records.filter(hasUnclearSegments).length;
   const manualOverrideCount = records.filter(usedManualOverride).length;
+  const promptCoverageIncompleteCount = records.filter((record) => record.has_unvisited_prompts || record.has_unrecorded_viewed_prompts).length;
+  const rerecordImprovedCount = records.filter((record) => record.rerecord_used && !recordNeedsQc(record)).length;
+  const cataractReviewCount = highRiskFieldReviewCount(records, "cataract_history_confirmed");
+  const glassesReviewCount = highRiskFieldReviewCount(records, "glasses_selected");
   const averageConfidence = totalRecords
     ? Math.round((records.reduce((sum, record) => sum + record.confidence_score, 0) / totalRecords) * 100) / 100
     : 0;
@@ -305,7 +389,11 @@ export function computeInsights(records: TestRecord[]): InsightsSummary {
     unclearSegmentRecordCount,
     manualOverrideCount,
     editedCount,
-    fieldGaps
+    fieldGaps,
+    promptCoverageIncompleteCount,
+    rerecordImprovedCount,
+    cataractReviewCount,
+    glassesReviewCount
   });
 
   return {
@@ -319,6 +407,8 @@ export function computeInsights(records: TestRecord[]): InsightsSummary {
     failedSyncCount,
     unclearSegmentRecordCount,
     manualOverrideCount,
+    promptCoverageIncompleteCount,
+    rerecordImprovedCount,
     fieldGaps,
     bySite,
     byLanguage,

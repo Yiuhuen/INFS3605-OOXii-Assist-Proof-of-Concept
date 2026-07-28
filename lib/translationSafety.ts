@@ -45,7 +45,7 @@ export function analyseTranslationSafety(input: {
       type: "translation_uncertain",
       originalText: input.rawText,
       reason:
-        "No real translation provider is configured — this is a local, unverified processing copy of the original transcript, not a validated translation.",
+        "No real translation provider is configured — this is a local, unverified processing copy of the original transcript. Review against the audio.",
       translationRiskType: "untranslated_terms"
     });
   }

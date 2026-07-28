@@ -1,56 +1,53 @@
 "use client";
 
-import { ArrowRight, Globe, LogOut, MoreHorizontal } from "lucide-react";
-import type { LanguagePack, Tester } from "@/lib/types";
+import { ArrowRight, GraduationCap, LogOut, MoreHorizontal, ShieldCheck, Settings, UploadCloud } from "lucide-react";
+import type { LanguagePack } from "@/lib/types";
 import type { NextAction } from "@/lib/workflow";
-import { OfflineBadge, PrimaryButton, SecondaryButton, StatusBadge, WorkflowProgressRow } from "@/components/ui";
+import { PrimaryButton, SecondaryButton } from "@/components/ui";
 import { OneScreenShell, BottomActionBar } from "@/components/layout/OneScreenShell";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 
-function greetingForHour(hour: number) {
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
-}
-
-function sentenceCase(text: string) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 /**
- * Home screen — a single "what's next" view, not a dashboard. Everything
- * here renders from one NextAction (see lib/workflow.ts) so the tester
- * always sees exactly one primary step, plus a small "More" link for
- * everything else. Fits one viewport by design (OneScreenShell) — the
- * primary CTA and More link live in the footer so they're always visible
- * without scrolling, no matter how tall the status row above them gets.
+ * Home — a field tool's front door, not a dashboard. App name, one compact
+ * status row (saved / needs QC / pending sync), the primary next action, and
+ * the four secondary tools a tester reaches for between clients. An
+ * experienced tester reaches recording in two taps: Start new test → Start
+ * recording.
  */
 export function Dashboard({
-  tester,
   activePack,
   isOnline,
   nextAction,
+  savedRecords,
   recordsNeedingQc,
   recordsPendingSync,
   onNextAction,
   onMore,
-  onLogout
+  onLogout,
+  onQc,
+  onExport,
+  onTrainingRefresh,
+  onSettings
 }: {
-  tester: Tester;
   activePack: LanguagePack;
   isOnline: boolean;
   nextAction: NextAction;
+  savedRecords: number;
   recordsNeedingQc: number;
   recordsPendingSync: number;
   onNextAction: () => void;
   onMore: () => void;
   onLogout: () => void;
+  onQc: () => void;
+  onExport: () => void;
+  onTrainingRefresh: () => void;
+  onSettings: () => void;
 }) {
-  const greeting = greetingForHour(new Date().getHours());
-  const flaggedParts = [
-    recordsNeedingQc > 0 ? `${recordsNeedingQc} need${recordsNeedingQc === 1 ? "s" : ""} QC` : "",
-    recordsPendingSync > 0 ? `${recordsPendingSync} pending sync` : ""
-  ].filter(Boolean);
+  const statusParts = [
+    `${savedRecords} saved record${savedRecords === 1 ? "" : "s"}`,
+    `${recordsNeedingQc} need${recordsNeedingQc === 1 ? "s" : ""} QC`,
+    `${recordsPendingSync} pending sync`
+  ];
 
   return (
     <OneScreenShell
@@ -68,7 +65,6 @@ export function Dashboard({
       }
       footer={
         <BottomActionBar className="flex-col items-stretch gap-2">
-          <p className="text-center text-xs opacity-70">{nextAction.subtitle}</p>
           <PrimaryButton fullWidth className="py-3 text-base" icon={<ArrowRight className="h-5 w-5" />} onClick={onNextAction}>
             {nextAction.label}
           </PrimaryButton>
@@ -78,24 +74,50 @@ export function Dashboard({
         </BottomActionBar>
       }
     >
-      <div className="flex h-full min-h-0 flex-col justify-center gap-5 overflow-y-auto">
+      <div className="flex h-full min-h-0 flex-col justify-center gap-4 overflow-y-auto">
         <div>
-          <p className="text-sm opacity-70">{greeting}</p>
-          <h1 className="text-2xl font-black leading-tight sm:text-3xl">{tester.name}</h1>
-          <p className="mt-1 line-clamp-1 text-sm opacity-70">
-            {sentenceCase(tester.role)} · {tester.home_base}
+          <h1 className="text-2xl font-black leading-tight sm:text-3xl">OOXii Assist</h1>
+          <p className="mt-1 text-sm opacity-70">
+            {activePack.name} · {isOnline ? "Online" : "Offline — saves locally"}
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge label={activePack.name} tone="language" icon={<Globe className="h-3.5 w-3.5" />} />
-          <OfflineBadge isOnline={isOnline} />
-          {flaggedParts.length > 0 && (
-            <StatusBadge label={flaggedParts.join(" · ")} tone={recordsNeedingQc > 0 ? "danger" : "warn"} />
-          )}
+        {/* One compact status row — counts only, no chips. */}
+        <div className="rounded-xl border border-field-line bg-field-card px-3 py-2.5 text-sm">
+          <span className={recordsNeedingQc > 0 ? "font-semibold" : ""}>{statusParts.join(" · ")}</span>
         </div>
 
-        <WorkflowProgressRow currentStep={nextAction.stepId} />
+        {/* Secondary actions — the four things a tester reaches for between
+            clients, one tap from Home. Everything else (language packs,
+            display settings, prompt editor, demo data) stays behind More. */}
+        <div className="grid grid-cols-4 gap-1.5">
+          <button type="button" className="chip-button flex-col gap-1 px-1.5 py-2 text-center" onClick={onQc}>
+            <span className="relative">
+              <ShieldCheck className="h-4 w-4" />
+              {recordsNeedingQc > 0 && (
+                <span
+                  className="absolute -right-1.5 -top-1.5 flex h-3.5 min-w-[0.875rem] items-center justify-center rounded-full px-0.5 text-[9px] font-bold text-white"
+                  style={{ background: "var(--record)" }}
+                >
+                  {recordsNeedingQc}
+                </span>
+              )}
+            </span>
+            <span className="text-[10px] font-bold leading-none">QC</span>
+          </button>
+          <button type="button" className="chip-button flex-col gap-1 px-1.5 py-2 text-center" onClick={onExport}>
+            <UploadCloud className="h-4 w-4" />
+            <span className="text-[10px] font-bold leading-none">Export</span>
+          </button>
+          <button type="button" className="chip-button flex-col gap-1 px-1.5 py-2 text-center" onClick={onTrainingRefresh}>
+            <GraduationCap className="h-4 w-4" />
+            <span className="text-[10px] font-bold leading-none">Training</span>
+          </button>
+          <button type="button" className="chip-button flex-col gap-1 px-1.5 py-2 text-center" onClick={onSettings}>
+            <Settings className="h-4 w-4" />
+            <span className="text-[10px] font-bold leading-none">Settings</span>
+          </button>
+        </div>
       </div>
     </OneScreenShell>
   );

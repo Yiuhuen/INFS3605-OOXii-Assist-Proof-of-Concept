@@ -77,7 +77,7 @@ export function CompactHeader({
           </button>
         )}
         <div className="min-w-0">
-          {subtitle && <p className="truncate text-[10px] font-bold uppercase tracking-wide text-field-muted">{subtitle}</p>}
+          {subtitle && <p className="truncate text-[10px] font-bold text-field-muted">{subtitle}</p>}
           <h1 className="truncate text-base font-black leading-tight">{title}</h1>
         </div>
       </div>

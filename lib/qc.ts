@@ -219,12 +219,13 @@ export function hasUnresolvedCriticalTranscriptFlag(record: TestRecord) {
 }
 
 export function recordNeedsQc(record: TestRecord) {
-  // QC sign-off is terminal for data-quality issues, but genuine sync
-  // problems remain visible because the demo/export flows need to show
-  // pending/failed records. "Local only" (no Supabase configured) is a
-  // resolved, by-design state, not a problem — an approved local-only record
-  // is exactly as "done" as an approved synced one.
-  if (record.qc_status === "Approved" && (record.sync_status === "Synced" || record.sync_status === "Local only")) return false;
+  // QC sign-off is terminal for data-quality issues. "Local only" (no
+  // Supabase configured) and "Pending sync" are both by-design/timing sync
+  // states, not data-quality problems — an Approved record that simply
+  // hasn't synced yet (or never will, by design) is exactly as "done" as an
+  // Approved synced one. Only a genuine sync FAILURE keeps a record visible
+  // for review even after approval, since that's an unresolved problem.
+  if (record.qc_status === "Approved" && record.sync_status !== "Failed") return false;
   return (
     record.needs_qc ||
     record.requires_qc_verification ||
@@ -327,11 +328,11 @@ function buildCategorizedQcReasons(record: TestRecord): CategorizedQcReason[] {
       const isHighRisk = HIGH_RISK_EXTRACTED_FIELDS.includes(key);
 
       if (isHighRisk && !meta.value.trim()) {
-        reasons.push({ category: "Missing & edited fields", reason: `High-risk field not captured: ${label}` });
+        reasons.push({ category: "Missing & edited fields", reason: `${label} not captured` });
         return;
       }
       if (meta.source === "manual" && isHighRisk) {
-        reasons.push({ category: "Missing & edited fields", reason: `Manual value entered for high-risk field: ${label}` });
+        reasons.push({ category: "Missing & edited fields", reason: `${label} manually entered — verify before approval` });
       }
       if (meta.confidence === "low") {
         reasons.push({ category: "Transcript quality", reason: `Low-confidence extracted field: ${label}` });
@@ -380,6 +381,10 @@ export interface QcIssue {
   /** One-line explanation of what to check and why. */
   detail: string;
   source: QcIssueSource;
+  /** Field this issue is about, when it maps to exactly one — lets the QC screen jump straight to that field's editable input. */
+  fieldKey?: keyof ManualExtractedFields;
+  /** Transcript phrase (field evidence quote, or a flag's originalText) to highlight/scroll to when the reviewer opens this issue — spec §9/§10 "click a QC issue → highlight matching evidence". Absent when there's nothing specific to jump to (e.g. a field that was never captured at all). */
+  evidenceText?: string;
 }
 
 const SEVERITY_RANK: Record<QcIssueSeverity, number> = { high: 0, medium: 1, low: 2 };
@@ -409,8 +414,9 @@ export function qcReviewIssues(record: TestRecord): QcIssue[] {
         push({
           severity: "high",
           title: `${FIELD_DISPLAY_LABELS[key]} not captured`,
-          detail: "This high-risk field was not found in the transcript. Enter it from the audio or confirm it is genuinely unknown.",
-          source: "Field"
+          detail: "Not found in the transcript. Enter it from the audio or confirm it is genuinely unknown.",
+          source: "Field",
+          fieldKey: key
         });
       }
     });
@@ -428,7 +434,9 @@ export function qcReviewIssues(record: TestRecord): QcIssue[] {
           severity: "high",
           title: `${FIELD_DISPLAY_LABELS[key]} was manually entered`,
           detail: "Check the manual value against the transcript or audio before approval.",
-          source: "Field"
+          source: "Field",
+          fieldKey: key,
+          evidenceText: meta.evidence
         });
       }
     });
@@ -452,7 +460,9 @@ export function qcReviewIssues(record: TestRecord): QcIssue[] {
           severity: "medium",
           title: `${FIELD_DISPLAY_LABELS[key]} extracted with low confidence`,
           detail: meta.reason ?? "Verify this value against the audio.",
-          source: "Field"
+          source: "Field",
+          fieldKey: key,
+          evidenceText: meta.evidence
         });
       }
     });
@@ -504,7 +514,8 @@ export function qcReviewIssues(record: TestRecord): QcIssue[] {
         severity: "medium",
         title: `Possible mishearing: "${flag.originalText}" may mean "${flag.suggestedText}"`,
         detail: "Confirm the wording against the audio before trusting extracted values.",
-        source: "Transcript"
+        source: "Transcript",
+        evidenceText: flag.originalText
       });
     }
   }
@@ -585,6 +596,120 @@ export function qcReasonGroups(record: TestRecord): Array<{ category: QcReasonCa
     category,
     reasons: categorized.filter((item) => item.category === category).map((item) => item.reason)
   })).filter((group) => group.reasons.length > 0);
+}
+
+/**
+ * Single-field version of the per-field reasons buildCategorizedQcReasons
+ * loops over for every field — reused by the audit CSV's long/tidy
+ * `qc_reason` column (lib/csv.ts) so the two never drift on what counts as a
+ * per-field problem. Empty string when the field has no field_confidence
+ * entry or is currently clean.
+ */
+export function fieldQcReason(record: TestRecord, key: keyof ManualExtractedFields): string {
+  const effective = record.edited_extracted_json ?? record.extracted_json;
+  const meta = effective.field_confidence?.[key];
+  if (!meta) return "";
+  const label = FIELD_DISPLAY_LABELS[key];
+  const isHighRisk = HIGH_RISK_EXTRACTED_FIELDS.includes(key);
+  if (isHighRisk && !meta.value.trim()) return `${label} not captured`;
+  if (meta.source === "manual" && isHighRisk) return `${label} manually entered — verify before approval`;
+  if (meta.confidence === "low") return `Low-confidence extracted field: ${label}`;
+  if (meta.requiresReview) return `Draft field extracted from transcript requires review: ${label}`;
+  return "";
+}
+
+/** Export-facing QC status vocabulary — distinct from the internal QCStatus workflow enum (Unreviewed/In review/Corrected/Approved), which stays as the QC screen's approve workflow. This is what CSV exports show. */
+export type ExportQcStatus = "clean" | "needs_review" | "reviewed" | "unresolved";
+
+/**
+ * "unresolved" only for a genuine sync FAILURE (not merely pending/local-only
+ * — see the exemption in recordNeedsQc above); "needs_review" for anything
+ * recordNeedsQc still flags; "reviewed" for a record that WAS flagged and a
+ * human corrected/approved it; "clean" for a record that never needed a
+ * human touch at all.
+ */
+export function exportQcStatus(record: TestRecord): ExportQcStatus {
+  if (record.sync_status === "Failed") return "unresolved";
+  if (recordNeedsQc(record)) return "needs_review";
+  if (record.edited_by_user || record.qc_status === "Corrected") return "reviewed";
+  return "clean";
+}
+
+/** Short display labels used only by qcReasonSummary below — deliberately shorter than FIELD_DISPLAY_LABELS so the composed sentence reads naturally. */
+const SUMMARY_FIELD_LABELS: Partial<Record<keyof ManualExtractedFields, string>> = {
+  right_eye_distance_result: "right eye result",
+  left_eye_distance_result: "left eye result",
+  final_readable_line: "final readable line"
+};
+const SUMMARY_FIELD_ORDER: Array<keyof ManualExtractedFields> = ["right_eye_distance_result", "left_eye_distance_result", "final_readable_line"];
+
+/**
+ * Short, curated, operator-facing summary sentence for the OOXii Data
+ * Longlist's `qc_reason_summary` column — semicolon-joined, sentence case.
+ * Deliberately NOT a reuse of qcReasons()/qcReasonGroups() above: those are
+ * the full reviewer checklist (every status/sync/field signal); this is a
+ * short "what's actually wrong" sentence for a spreadsheet cell. When prompt
+ * coverage is incomplete, missing fields are phrased "missing X" (a
+ * consequence of the coverage gap); otherwise a missing field is phrased "X
+ * not captured" (the field itself is the problem).
+ */
+export function qcReasonSummary(record: TestRecord): string {
+  const effective = record.edited_extracted_json ?? record.extracted_json;
+  const fieldConfidence = effective.field_confidence;
+  const parts: string[] = [];
+
+  if (usedManualOverride(record)) parts.push("manual recording override");
+  if (record.has_unvisited_prompts) parts.push("prompt coverage incomplete");
+  if (!record.has_unvisited_prompts && (isLowConfidence(record) || record.transcript_quality_risk !== "low")) {
+    parts.push("low-confidence transcript evidence");
+  }
+
+  const comfortMeta = fieldConfidence?.comfort_response;
+  if (comfortMeta?.value.trim() && (comfortMeta.value.trim().toLowerCase() === "unclear" || comfortMeta.confidence === "low")) {
+    parts.push("comfort response unclear");
+  }
+
+  if (fieldConfidence) {
+    for (const key of SUMMARY_FIELD_ORDER) {
+      const meta = fieldConfidence[key];
+      if (meta && !meta.value.trim()) {
+        parts.push(record.has_unvisited_prompts ? `missing ${SUMMARY_FIELD_LABELS[key]}` : `${SUMMARY_FIELD_LABELS[key]} not captured`);
+      }
+    }
+    const cataractMeta = fieldConfidence.cataract_history_confirmed;
+    if (cataractMeta && !cataractMeta.value.trim()) {
+      parts.push(record.has_unvisited_prompts ? "missing cataract history" : "cataract history not captured");
+    }
+    const glassesMeta = fieldConfidence.glasses_selected;
+    if (glassesMeta) {
+      if (!glassesMeta.value.trim()) {
+        parts.push(record.has_unvisited_prompts ? "missing glasses selected / dispensed" : "glasses selected / dispensed not captured");
+      } else if (glassesMeta.source === "manual") {
+        parts.push("glasses selected / dispensed manually entered — verify before approval");
+      }
+    }
+  }
+
+  if (parts.length === 0) return "";
+  const joined = parts.join("; ");
+  return joined.charAt(0).toUpperCase() + joined.slice(1);
+}
+
+/** Short machine-readable slugs for the same signals qcReasonSummary composes into prose — for programmatic filtering/reporting, not currently a CSV column. */
+export function qcReasonCodes(record: TestRecord): string[] {
+  const effective = record.edited_extracted_json ?? record.extracted_json;
+  const fieldConfidence = effective.field_confidence;
+  const codes: string[] = [];
+  if (usedManualOverride(record)) codes.push("manual_override");
+  if (record.has_unvisited_prompts) codes.push("prompt_coverage_incomplete");
+  if (isLowConfidence(record) || record.transcript_quality_risk !== "low") codes.push("low_confidence");
+  if (fieldConfidence?.cataract_history_confirmed && !fieldConfidence.cataract_history_confirmed.value.trim()) codes.push("cataract_history_missing");
+  if (fieldConfidence?.glasses_selected) {
+    if (!fieldConfidence.glasses_selected.value.trim()) codes.push("glasses_selected_missing");
+    else if (fieldConfidence.glasses_selected.source === "manual") codes.push("manual_edit_high_risk");
+  }
+  if (record.sync_status === "Failed") codes.push("sync_failed");
+  return codes;
 }
 
 export function filterRecords(records: TestRecord[], filter: QcFilter): TestRecord[] {

@@ -7,6 +7,7 @@
  * Run: npm run test:extraction
  */
 import { extractFieldsFromTranscript, runFieldExtractionSelfTest } from "../lib/fieldExtraction";
+import { buildLiveCapturedFields } from "../lib/liveCapturedFields";
 import { qcReasons } from "../lib/qc";
 import { analyseTranscriptQuality, runTranscriptQualitySelfTest } from "../lib/transcriptQuality";
 import type { ExtractedFieldMap, TestRecord } from "../lib/types";
@@ -32,6 +33,191 @@ function expectEqual(label: string, actual: unknown, expected: unknown): string 
   if (actual !== expected) return `${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`;
   return null;
 }
+
+function liveExtract(params: { finalTranscriptText?: string; interimTranscriptText?: string; manualFallbackText?: string }) {
+  return buildLiveCapturedFields({
+    finalTranscriptText: params.finalTranscriptText ?? "",
+    interimTranscriptText: params.interimTranscriptText ?? "",
+    manualFallbackText: params.manualFallbackText ?? "",
+    transcriptSegments: [],
+    promptMarkers: [],
+    language: "en"
+  });
+}
+
+const LIVE_FIELD_COUNT = 7;
+
+function liveCapturedCount(map: NonNullable<ReturnType<typeof liveExtract>>): number {
+  return Object.values(map).filter((field) => field.status !== "Missing").length;
+}
+
+// ---------------------------------------------------------------------------
+// Live "Captured so far" preview (lib/liveCapturedFields.ts) — Phase 10 cases.
+// Note: glasses_selected's captured VALUE below is "+1.00", the bare diopter
+// the shared extractor (lib/fieldExtraction.ts) actually produces and the
+// existing "captures +1.00 conservatively" test above already locks in —
+// not "+1.00 reading glasses". Asserting the richer descriptive string here
+// would mean inventing new extraction behaviour never exercised anywhere
+// else (CSV export, QC, Review captured fields), for a live-only preview
+// that must stay a faithful glance at the same data those screens show.
+// ---------------------------------------------------------------------------
+
+cases.push({
+  name: "Live 1. 'The client already has glasses.' — Current glasses Yes, 1 of 7, Glasses selected stays Missing",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The client already has glasses." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("current_glasses value", map.current_glasses.value, "Yes") ??
+      expectEqual("current_glasses status", map.current_glasses.status, "Captured") ??
+      expectEqual("glasses_selected status", map.glasses_selected.status, "Missing") ??
+      expectEqual("count", liveCapturedCount(map), 1)
+    );
+  }
+});
+
+cases.push({
+  name: "Live 2. Adding cataract sentence brings count to 2 of 7",
+  run: () => {
+    const map = liveExtract({
+      finalTranscriptText: "The client already has glasses. The client has not had cataract surgery."
+    });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("current_glasses value", map.current_glasses.value, "Yes") ??
+      expectEqual("cataract value", map.cataract_history_confirmed.value, "No") ??
+      expectEqual("cataract status", map.cataract_history_confirmed.status, "Captured") ??
+      expectEqual("count", liveCapturedCount(map), 2)
+    );
+  }
+});
+
+cases.push({
+  name: "Live 3. Right/left eye lines captured together",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The right eye can read line five. The left eye can read line four." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("right eye", map.right_eye_distance_result.value, "Line 5") ??
+      expectEqual("left eye", map.left_eye_distance_result.value, "Line 4") ??
+      expectEqual("right eye status", map.right_eye_distance_result.status, "Captured") ??
+      expectEqual("left eye status", map.left_eye_distance_result.status, "Captured")
+    );
+  }
+});
+
+cases.push({
+  name: "Live 4. Final line and comfort captured together",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The final readable line is line four. The glasses feel comfortable." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("final line", map.final_readable_line.value, "Line 4") ??
+      expectEqual("comfort", map.comfort_response.value, "Comfortable")
+    );
+  }
+});
+
+cases.push({
+  name: "Live 5. Glasses selected diopter captured from spoken diopter phrase",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The glasses selected are plus one point zero zero reading glasses." });
+    if (!map) return "expected a non-null live captured field map";
+    return expectEqual("glasses_selected", map.glasses_selected.value, "+1.00");
+  }
+});
+
+cases.push({
+  name: "Live 6. Current glasses and Glasses selected are never confused",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The client already has glasses." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("current_glasses", map.current_glasses.value, "Yes") ??
+      expectEqual("glasses_selected value", map.glasses_selected.value, "") ??
+      expectEqual("glasses_selected status", map.glasses_selected.status, "Missing")
+    );
+  }
+});
+
+cases.push({
+  name: "Live 7. Hedge word 'maybe' downgrades an otherwise-clean match to Check",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The right eye maybe line five." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("right eye value", map.right_eye_distance_result.value, "Line 5") ??
+      expectEqual("right eye status", map.right_eye_distance_result.status, "Check")
+    );
+  }
+});
+
+cases.push({
+  name: "Live 8. A value that only exists once interim text is folded in is Check, not Captured",
+  run: () => {
+    const map = liveExtract({ interimTranscriptText: "right eye can read line five" });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("right eye value", map.right_eye_distance_result.value, "Line 5") ??
+      expectEqual("right eye status", map.right_eye_distance_result.status, "Check")
+    );
+  }
+});
+
+cases.push({
+  name: "Live 9. Once the same phrase lands as a final segment, status upgrades to Captured",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "The right eye can read line five.", interimTranscriptText: "the left eye" });
+    if (!map) return "expected a non-null live captured field map";
+    return expectEqual("right eye status once final", map.right_eye_distance_result.status, "Captured");
+  }
+});
+
+cases.push({
+  name: "Live 10. No transcript at all returns null (all seven fields render Missing)",
+  run: () => {
+    const map = liveExtract({});
+    return map === null ? null : "expected null when there is no final, interim, or manual transcript text yet";
+  }
+});
+
+cases.push({
+  name: "Live 11. Manual fallback text is extracted, but always marked Check",
+  run: () => {
+    const map = liveExtract({ manualFallbackText: "The client already has glasses. The final readable line is line four." });
+    if (!map) return "expected a non-null live captured field map";
+    return (
+      expectEqual("current_glasses value", map.current_glasses.value, "Yes") ??
+      expectEqual("current_glasses status", map.current_glasses.status, "Check") ??
+      expectEqual("final line status", map.final_readable_line.status, "Check")
+    );
+  }
+});
+
+cases.push({
+  name: "Live 12. Manual fallback is ignored once real STT text exists",
+  run: () => {
+    const map = liveExtract({
+      finalTranscriptText: "The client already has glasses.",
+      manualFallbackText: "The client does not have glasses."
+    });
+    if (!map) return "expected a non-null live captured field map";
+    // STT text wins outright per the priority order — the stale manual note
+    // must not override or blend with a real transcript.
+    return expectEqual("current_glasses value", map.current_glasses.value, "Yes");
+  }
+});
+
+cases.push({
+  name: "Live 13. Hedge word 'unknown' downgrades cataract to Check",
+  run: () => {
+    const map = liveExtract({ finalTranscriptText: "Cataract history unknown." });
+    if (!map) return "expected a non-null live captured field map";
+    return map.cataract_history_confirmed.status === "Check"
+      ? null
+      : `expected Check, got ${map.cataract_history_confirmed.status} (value: ${JSON.stringify(map.cataract_history_confirmed.value)})`;
+  }
+});
 
 // A. Clear transcript — the exact task-brief fixture (client already has
 // glasses, right eye line 5, left eye line 4, comfortable, explicit final line).
@@ -271,7 +457,7 @@ cases.push({
 
     const reasons = qcReasons(record);
     return (
-      (reasons.some((reason) => reason.includes("Manual value entered for high-risk field") && reason.includes("Glasses selected / dispensed"))
+      (reasons.some((reason) => reason.includes("manually entered") && reason.includes("Glasses selected / dispensed"))
         ? null
         : `expected a manual high-risk QC reason for glasses_selected, got: ${JSON.stringify(reasons)}`) ??
       (reasons.some((reason) => reason.includes("Edited by tester")) ? null : "expected 'Edited by tester' QC reason") ??

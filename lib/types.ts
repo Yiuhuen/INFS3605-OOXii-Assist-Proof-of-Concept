@@ -109,8 +109,10 @@ export interface TestRecord {
   session_id: string;
   client_id: string;
   tester_id: string;
-  /** Mirrors client_snapshot.location_site at creation — a top-level convenience field for linking/reporting without unnesting client_snapshot. */
+  /** Mirrors client_snapshot.location_site at creation — a top-level convenience field for linking/reporting without unnesting client_snapshot. Distinct from outreach_session below: this is the physical site ("Site A"), not the session/cohort label. */
   deployment_site: string;
+  /** Human-readable outreach session/cohort label (e.g. "Outreach Session A") — distinct from deployment_site (the physical site name). Empty for real records today; no session-tracking UI exists yet, only the reporting/export concept. */
+  outreach_session: string;
   language: LanguageCode;
   status: TestStatus;
   sync_status: SyncStatus;
@@ -181,6 +183,12 @@ export interface TestRecord {
   recording_attempt_number: number;
   /** True if Rerecord was used at least once for this client before this record was saved. */
   rerecord_used: boolean;
+  /** True only for records created by the synthetic demo-data seed (see lib/demoRecords.ts) — never set by real recording/STT. Lets "Clear synthetic demo data" remove exactly these records without touching real ones. */
+  demo_record: boolean;
+  /** Version tag of the synthetic demo dataset that produced this record (e.g. "2026-07-ooxii-demo-v1") — empty for real records. Lets re-seeding replace an older demo dataset instead of duplicating it. */
+  demo_dataset_version: string;
+  /** Cosmetic display-name override for the language_pack CSV/UI column — empty means "use LANGUAGE_LABELS[language]". Exists only so the synthetic demo dataset can show illustrative names (e.g. "Cantonese") for outreach variety without inventing a fake LanguageCode — the real `language` field above always stays a genuine supported code. */
+  language_pack_label: string;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;

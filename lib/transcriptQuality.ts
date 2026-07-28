@@ -215,7 +215,7 @@ function detectMissingExpectedTermFlags(segments: TranscriptSegment[], rawText: 
 }
 
 function summariseFlags(flags: TranscriptQualityFlag[], overallRisk: TranscriptQualityReport["overallRisk"]): string {
-  if (flags.length === 0) return "No transcript quality concerns detected. This is still a draft transcript, not a validated clinical record.";
+  if (flags.length === 0) return "No transcript quality concerns detected. This is still a draft transcript — review before relying on it.";
   const critical = flags.filter((flag) => flag.severity === "critical").length;
   const warning = flags.filter((flag) => flag.severity === "warning").length;
   const info = flags.filter((flag) => flag.severity === "info").length;

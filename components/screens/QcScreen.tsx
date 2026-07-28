@@ -1,42 +1,56 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ChevronLeft, ChevronRight, Eye } from "lucide-react";
-import { UNKNOWN_FIELD_VALUE, type ExtractedFields, type FieldConfidenceLevel, type ManualExtractedFields, type ProcessingStatus, type TestRecord } from "@/lib/types";
-import {
-  filterRecords,
-  qcFilters,
-  qcReviewIssues,
-  qcStatusLabel,
-  syncStatusLabel,
-  type QcFilter,
-  type QcIssue,
-  type QcIssueSeverity
-} from "@/lib/qc";
+import { CheckCircle2, ChevronLeft, ChevronRight, Clock, Eye, SearchX } from "lucide-react";
+import { UNKNOWN_FIELD_VALUE, type ExtractedFields, type FieldConfidence, type ManualExtractedFields, type ProcessingStatus, type RecordingStatus, type TestRecord } from "@/lib/types";
+import { filterRecords, qcFilters, qcReviewIssues, qcStatusLabel, syncStatusLabel, type QcFilter, type QcIssue, type QcIssueSeverity } from "@/lib/qc";
 import { FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
-import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
-import { Disclosure, DetailModal, EmptyState, PrimaryButton, SecondaryButton, StatusBadge, TextAreaField, type BadgeTone } from "@/components/ui";
+import { ConfirmDialog, Disclosure, DetailModal, EmptyState, PrimaryButton, SecondaryButton, StatusDot, TextAreaField, TranscriptTab, type StatusDotTone } from "@/components/ui";
 import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
+import { HighlightedTranscript } from "@/components/TranscriptHighlight";
 
-const RISK_TONE: Record<"low" | "medium" | "high", BadgeTone> = { low: "good", medium: "warn", high: "danger" };
-const SEVERITY_TONE: Record<"info" | "warning" | "critical", BadgeTone> = { info: "neutral", warning: "warn", critical: "danger" };
-const HIGH_RISK_FIELD_SET = new Set<string>(HIGH_RISK_EXTRACTED_FIELDS);
+const RISK_TONE: Record<"low" | "medium" | "high", StatusDotTone> = { low: "good", medium: "warn", high: "danger" };
 const SOURCE_LABELS: Record<"manual" | "transcript" | "corrected_transcript" | "unknown", string> = {
   manual: "Manual entry",
-  transcript: "Transcript",
-  corrected_transcript: "Corrected transcript",
+  transcript: "Auto-filled from transcript",
+  corrected_transcript: "Auto-filled from corrected transcript",
   unknown: "Not captured"
 };
-const CONFIDENCE_TONE: Record<FieldConfidenceLevel, BadgeTone> = { high: "good", medium: "neutral", low: "warn", unknown: "warn" };
 
-const ISSUE_SEVERITY_TONE: Record<QcIssueSeverity, BadgeTone> = { high: "danger", medium: "warn", low: "neutral" };
+const ISSUE_SEVERITY_TONE: Record<QcIssueSeverity, StatusDotTone> = { high: "danger", medium: "warn", low: "neutral" };
 const ISSUE_SEVERITY_LABEL: Record<QcIssueSeverity, string> = { high: "High", medium: "Medium", low: "Low" };
-const ISSUE_ACTION_LABEL: Record<QcIssue["source"], string> = {
-  Field: "Review fields",
-  Transcript: "Review transcript",
-  Recording: "Review recording",
-  Prompt: "Review prompts"
+
+/** Human-readable "recording mode" for the compact record header — RecordingStatus stays the machine-readable enum, this is display-only. */
+const RECORDING_MODE_LABELS: Record<RecordingStatus, string> = {
+  recorded: "Recorded",
+  failed: "Mic failed",
+  not_recorded: "Not recorded",
+  manual_override: "Manual override"
 };
+
+const NO_EVIDENCE_MESSAGE = "No transcript evidence found — manual review required.";
+
+/** Reviewer-facing per-field status vocabulary (spec: Captured / Missing / Check / Edited) — distinct from FieldConfidence.source/confidence, which stay the machine-readable signal underneath. */
+type QcFieldStatus = "Captured" | "Missing" | "Check" | "Edited";
+const QC_FIELD_STATUS_TONE: Record<QcFieldStatus, StatusDotTone> = { Captured: "good", Missing: "warn", Check: "warn", Edited: "neutral" };
+
+function deriveQcFieldStatus(meta: FieldConfidence | undefined): QcFieldStatus {
+  if (!meta || !meta.value.trim() || meta.value === UNKNOWN_FIELD_VALUE) return "Missing";
+  if (meta.source === "manual") return "Edited";
+  if (meta.requiresReview) return "Check";
+  return "Captured";
+}
+
+/** The 7 fields the QC reviewer works through (spec) — additional_notes is free text, never extracted, so it's excluded here same as CapturedFieldsScreen. */
+const QC_FIELD_ORDER: Array<keyof ManualExtractedFields> = [
+  "current_glasses",
+  "cataract_history_confirmed",
+  "right_eye_distance_result",
+  "left_eye_distance_result",
+  "final_readable_line",
+  "comfort_response",
+  "glasses_selected"
+];
 
 /**
  * Reviewer-facing processing copy — more specific than the shared
@@ -79,6 +93,16 @@ export function QcScreen({
   const [detailOpen, setDetailOpen] = useState(false);
   /** Record ids whose full detail the reviewer has actually opened this session — gates "Mark reviewed" so a problematic record can't be waved through unseen. */
   const [openedRecordIds, setOpenedRecordIds] = useState<Set<string>>(new Set());
+  /** "Mark reviewed" always requires an explicit confirmation step, even after opening the full record — never a single accidental tap. */
+  const [confirmingReview, setConfirmingReview] = useState(false);
+  /** Transcript phrase to highlight/scroll to in the transcript panel — set when the reviewer opens a specific QC issue or captured field, cleared on record change or modal close. */
+  const [focusPhrase, setFocusPhrase] = useState<string | undefined>(undefined);
+  /** True right after the reviewer tried to jump to evidence that doesn't exist — shows the honest "No transcript evidence found" banner instead of silently doing nothing. */
+  const [noEvidenceNotice, setNoEvidenceNotice] = useState(false);
+  /** Inline transcript tab on the default QC layout — collapsed until the reviewer expands it or clicks an issue. Pure presentation state. */
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  /** Field the last-clicked issue is about, shown for correction directly under the inline transcript — null when the issue has no single field. */
+  const [activeIssueFieldKey, setActiveIssueFieldKey] = useState<keyof ManualExtractedFields | null>(null);
   const selected = filtered.find((record) => record.id === selectedId) ?? filtered[0];
   const selectedIndex = selected ? filtered.findIndex((record) => record.id === selected.id) : -1;
 
@@ -94,6 +118,10 @@ export function QcScreen({
 
   useEffect(() => {
     if (selected) loadQcAudio(selected);
+    setFocusPhrase(undefined);
+    setNoEvidenceNotice(false);
+    setTranscriptExpanded(false);
+    setActiveIssueFieldKey(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
@@ -117,6 +145,52 @@ export function QcScreen({
     setDetailOpen(true);
   }
 
+  /**
+   * Jumps to a piece of transcript evidence — used by both a captured
+   * field's "Jump to transcript" action and a QC issue's "Review evidence"
+   * action. When there's genuinely nothing to jump to, this shows the honest
+   * "No transcript evidence found" banner instead of doing nothing, so a tap
+   * on "Glasses selected" with no evidence still tells the reviewer
+   * something happened.
+   */
+  function jumpToEvidence(evidenceText: string | undefined) {
+    if (evidenceText) {
+      setFocusPhrase(evidenceText);
+      setNoEvidenceNotice(false);
+    } else {
+      setFocusPhrase(undefined);
+      setNoEvidenceNotice(true);
+    }
+  }
+
+  /**
+   * Issue click → expand the inline transcript tab and highlight that
+   * issue's evidence (or show the honest no-evidence banner), with the
+   * issue's field editable right under the transcript. The full-record
+   * workspace stays one tap away via "Review evidence" — and is still the
+   * required step before "Mark reviewed".
+   */
+  function openIssue(issue: QcIssue) {
+    setTranscriptExpanded(true);
+    setActiveIssueFieldKey(issue.fieldKey ?? null);
+    jumpToEvidence(issue.evidenceText);
+  }
+
+  function closeFullRecord() {
+    setDetailOpen(false);
+    setFocusPhrase(undefined);
+    setNoEvidenceNotice(false);
+  }
+
+  function requestMarkComplete() {
+    setConfirmingReview(true);
+  }
+
+  function confirmMarkComplete() {
+    setConfirmingReview(false);
+    if (selected) markComplete(selected);
+  }
+
   return (
     <OneScreenShell
       header={<CompactHeader title="QC Review" onBack={onBack} isOnline={isOnline} />}
@@ -125,7 +199,7 @@ export function QcScreen({
           {selected && !isApproved ? (
             hasOpenedSelected ? (
               <>
-                <PrimaryButton fullWidth className="py-2.5 text-sm" icon={<CheckCircle2 className="h-4 w-4" />} onClick={() => markComplete(selected)}>
+                <PrimaryButton fullWidth className="py-2.5 text-sm" icon={<CheckCircle2 className="h-4 w-4" />} onClick={requestMarkComplete}>
                   Mark reviewed
                 </PrimaryButton>
                 <SecondaryButton fullWidth className="py-2 text-sm" onClick={onBack}>
@@ -135,12 +209,13 @@ export function QcScreen({
             ) : (
               <>
                 <PrimaryButton fullWidth className="py-2.5 text-sm" icon={<Eye className="h-4 w-4" />} onClick={openFullRecord}>
-                  Review full record
+                  Review evidence
                 </PrimaryButton>
                 <SecondaryButton fullWidth className="py-2 text-sm" onClick={onBack}>
                   Keep in QC
                 </SecondaryButton>
-                <p className="text-center text-[11px] opacity-60">Open the full record before marking it reviewed.</p>
+                {/* Hidden on short viewports (see globals.css @media max-height:700px) — the shell clips rather than scrolls, and the two button labels already say what to do without this line. */}
+                <p className="qc-review-hint text-center text-[11px] opacity-60">Open the full record before marking it reviewed.</p>
               </>
             )
           ) : (
@@ -196,10 +271,12 @@ export function QcScreen({
               <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                 <dt className="opacity-60">QC status</dt>
                 <dd className={`font-semibold ${isApproved ? "text-[var(--good)]" : "text-[var(--warn)]"}`}>{qcStatusLabel(selected.qc_status)}</dd>
-                <dt className="opacity-60">Completeness</dt>
+                <dt className="opacity-60">Capture confidence</dt>
                 <dd className="font-semibold">{Math.round(selected.confidence_score * 100)}%</dd>
                 <dt className="opacity-60">Storage</dt>
                 <dd className="font-semibold">{syncStatusLabel(selected.sync_status)}</dd>
+                <dt className="opacity-60">Recording mode</dt>
+                <dd className="font-semibold">{RECORDING_MODE_LABELS[selected.recording_status]}</dd>
                 {processingSummary && (
                   <>
                     <dt className="opacity-60">Processing</dt>
@@ -222,18 +299,18 @@ export function QcScreen({
                 {issues.map((issue) => (
                   <div key={issue.id} className="px-3 py-2">
                     <div className="flex items-start gap-2">
-                      <StatusBadge label={ISSUE_SEVERITY_LABEL[issue.severity]} tone={ISSUE_SEVERITY_TONE[issue.severity]} />
+                      <StatusDot label={ISSUE_SEVERITY_LABEL[issue.severity]} tone={ISSUE_SEVERITY_TONE[issue.severity]} className="mt-0.5 shrink-0" />
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold leading-snug">{issue.title}</p>
                         <p className="mt-0.5 text-xs leading-snug opacity-70">{issue.detail}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wide opacity-50">{issue.source}</span>
+                          <span className="text-[10px] font-semibold opacity-50">{issue.source}</span>
                           <button
                             type="button"
                             className="text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline"
-                            onClick={openFullRecord}
+                            onClick={() => openIssue(issue)}
                           >
-                            {ISSUE_ACTION_LABEL[issue.source]} →
+                            Review evidence →
                           </button>
                         </div>
                       </div>
@@ -242,12 +319,65 @@ export function QcScreen({
                 ))}
               </div>
             </div>
+
+            {/* Transcript — supporting evidence, collapsed by default. An
+                issue click expands it, highlights the evidence, and puts the
+                related field right underneath for correction. */}
+            {(() => {
+              const qcLineCount = selected.transcript_segments.filter((segment) => segment.isFinal && segment.text.trim()).length;
+              const activeFieldStatus = activeIssueFieldKey ? deriveQcFieldStatus(effective.field_confidence?.[activeIssueFieldKey]) : null;
+              return (
+                <div className="shrink-0">
+                  <TranscriptTab
+                    subtitle={qcLineCount > 0 ? `${qcLineCount} line${qcLineCount === 1 ? "" : "s"} captured` : "Full text"}
+                    expanded={transcriptExpanded}
+                    onToggle={() => setTranscriptExpanded((value) => !value)}
+                    maxHeightClass="max-h-36"
+                    collapsedPreview={
+                      selected.corrected_transcript_text.trim() ? (
+                        <p className="line-clamp-2 text-sm leading-snug opacity-90">{selected.corrected_transcript_text}</p>
+                      ) : undefined
+                    }
+                  >
+                    {noEvidenceNotice && (
+                      <div className="mb-2 flex items-center gap-2 rounded-xl border border-[var(--warn-border)] bg-[var(--warn-bg)] px-3 py-2 text-sm text-[var(--warn)]">
+                        <SearchX className="h-4 w-4 shrink-0" />
+                        {NO_EVIDENCE_MESSAGE}
+                      </div>
+                    )}
+                    <div className="text-sm">
+                      <HighlightedTranscript
+                        text={selected.corrected_transcript_text.trim() ? selected.corrected_transcript_text : selected.raw_transcript_text}
+                        focusPhrase={focusPhrase}
+                      />
+                    </div>
+                    {activeIssueFieldKey && (
+                      <div className="mt-2 rounded-xl border border-field-line bg-field-surface p-2">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold opacity-90">{FIELD_DISPLAY_LABELS[activeIssueFieldKey]}</span>
+                          {activeFieldStatus && <StatusDot label={activeFieldStatus} tone={QC_FIELD_STATUS_TONE[activeFieldStatus]} className="shrink-0" />}
+                        </div>
+                        <TextAreaField
+                          label={FIELD_DISPLAY_LABELS[activeIssueFieldKey]}
+                          hideLabel
+                          value={effective[activeIssueFieldKey] === UNKNOWN_FIELD_VALUE ? "" : String(effective[activeIssueFieldKey])}
+                          placeholder="Not captured"
+                          onChange={(event) => updateRecord(selected, { [activeIssueFieldKey]: event.target.value } as Partial<ExtractedFields>)}
+                          rows={2}
+                        />
+                        <p className="mt-1 text-[11px] opacity-60">Editing marks this field Edited and keeps the record in QC for verification.</p>
+                      </div>
+                    )}
+                  </TranscriptTab>
+                </div>
+              );
+            })()}
           </>
         )}
       </div>
 
       {selected && effective && (
-        <DetailModal open={detailOpen} title={`Review — ${selected.client_id}`} onClose={() => setDetailOpen(false)}>
+        <DetailModal open={detailOpen} title={`Review — ${selected.client_id}`} onClose={closeFullRecord}>
           <div className="space-y-5">
             {selected.manual_override_reason.trim() && (
               <div className="rounded-2xl border border-field-line bg-field-surface p-3 text-sm">
@@ -258,14 +388,13 @@ export function QcScreen({
             <div>
               <div className="flex items-center justify-between">
                 <p className="field-label mb-0">Audio record</p>
-                <StatusBadge
-                  label={`${Math.floor(selected.recording_duration_seconds / 60)
+                <span className="text-xs font-semibold tabular-nums opacity-70">
+                  {`${Math.floor(selected.recording_duration_seconds / 60)
                     .toString()
                     .padStart(2, "0")}:${Math.floor(selected.recording_duration_seconds % 60)
                     .toString()
                     .padStart(2, "0")}`}
-                  tone="neutral"
-                />
+                </span>
               </div>
               {qcAudioUrl ? <audio className="mt-2 w-full" controls src={qcAudioUrl} /> : <p className="mt-2 text-sm opacity-60">No audio available for this record.</p>}
             </div>
@@ -286,35 +415,62 @@ export function QcScreen({
               </div>
             )}
 
-            <div>
-              <div className="flex items-center justify-between">
-                <p className="field-label mb-0">Original transcript</p>
-                <StatusBadge label="Preserved" tone="good" />
-              </div>
-              <pre className="ink-panel mt-2 whitespace-pre-wrap text-sm opacity-90">{selected.raw_transcript_text}</pre>
-            </div>
-
-            {selected.english_processing_transcript && (
-              <div>
-                <p className="field-label">English processing copy</p>
-                <pre className="ink-panel whitespace-pre-wrap text-sm opacity-90">{selected.english_processing_transcript}</pre>
+            {noEvidenceNotice && (
+              <div className="flex items-center gap-2 rounded-xl border border-[var(--warn-border)] bg-[var(--warn-bg)] px-3 py-2 text-sm text-[var(--warn)]">
+                <SearchX className="h-4 w-4 shrink-0" />
+                {NO_EVIDENCE_MESSAGE}
               </div>
             )}
 
             <div>
               <div className="flex items-center justify-between">
-                <p className="field-label mb-0">Corrected transcript</p>
-                {!correctedTranscriptDiffers && <StatusBadge label="Same as processing copy" tone="neutral" />}
+                <p className="field-label mb-0">Corrected transcript — where a QC issue jumps to</p>
+                {!correctedTranscriptDiffers && <span className="text-[11px] font-semibold opacity-60">Same as processing copy</span>}
               </div>
-              <pre className="ink-panel mt-2 whitespace-pre-wrap text-sm opacity-90">{selected.corrected_transcript_text || "No corrected transcript recorded."}</pre>
+              <div className="ink-panel mt-2 max-h-56 overflow-y-auto text-sm opacity-90">
+                <HighlightedTranscript text={selected.corrected_transcript_text} focusPhrase={focusPhrase} />
+              </div>
             </div>
 
+            {/* Raw/English copies are audit context, not the working copy — collapsed so a long recording doesn't triple the modal's scroll length. */}
+            <Disclosure label="Original transcript (preserved, read-only)">
+              <div className="ink-panel text-sm opacity-90">
+                <HighlightedTranscript text={selected.raw_transcript_text} focusPhrase={focusPhrase} />
+              </div>
+            </Disclosure>
+
+            {selected.english_processing_transcript && (
+              <Disclosure label="English processing copy">
+                <div className="ink-panel text-sm opacity-90">
+                  <HighlightedTranscript text={selected.english_processing_transcript} focusPhrase={focusPhrase} />
+                </div>
+              </Disclosure>
+            )}
+
+            {selected.transcript_segments.length > 0 && (
+              <Disclosure label={`Segment timestamps (${selected.transcript_segments.length})`}>
+                <div className="space-y-1.5">
+                  {selected.transcript_segments
+                    .filter((segment) => segment.isFinal && segment.text.trim())
+                    .map((segment) => (
+                      <p key={segment.id} className="flex items-start gap-2 text-sm opacity-80">
+                        <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-60" />
+                        <span className="tabular-nums opacity-60">
+                          {new Date(segment.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                        <span>{segment.text}</span>
+                      </p>
+                    ))}
+                </div>
+              </Disclosure>
+            )}
+
             <div>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
+              <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1">
                 <p className="field-label mb-0">Transcript quality</p>
-                <StatusBadge label={`Risk: ${selected.transcript_quality_risk}`} tone={RISK_TONE[selected.transcript_quality_risk]} />
-                {selected.translation_review_required && <StatusBadge label="Translation requires review" tone="warn" />}
-                {selected.extraction_safety_status === "draft_review_required" && <StatusBadge label="Draft extraction — requires review" tone="warn" />}
+                <StatusDot label={`Risk: ${selected.transcript_quality_risk}`} tone={RISK_TONE[selected.transcript_quality_risk]} />
+                {selected.translation_review_required && <StatusDot label="Translation needs review" tone="warn" />}
+                {selected.extraction_safety_status === "draft_review_required" && <StatusDot label="Draft extraction — needs review" tone="warn" />}
               </div>
               {selected.transcript_quality_flags.length === 0 ? (
                 <p className="text-sm opacity-60">No transcript quality flags were raised for this record.</p>
@@ -323,12 +479,15 @@ export function QcScreen({
                   <div className="space-y-3">
                     {selected.transcript_quality_flags.map((flag) => (
                       <div key={flag.id} className="rounded-xl border border-field-line bg-field-surface p-3">
-                        <div className="mb-1 flex flex-wrap items-center gap-2">
-                          <StatusBadge label={flag.type.replaceAll("_", " ")} tone={SEVERITY_TONE[flag.severity]} />
+                        <div className="mb-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                          <StatusDot
+                            label={flag.type.replaceAll("_", " ")}
+                            tone={flag.severity === "critical" ? "danger" : flag.severity === "warning" ? "warn" : "neutral"}
+                          />
                           {selected.unresolved_transcript_flag_ids.includes(flag.id) ? (
-                            <StatusBadge label="Unresolved" tone="warn" />
+                            <StatusDot label="Unresolved" tone="warn" />
                           ) : (
-                            <StatusBadge label="Correction applied" tone="good" />
+                            <StatusDot label="Correction applied" tone="good" />
                           )}
                         </div>
                         <p>
@@ -363,31 +522,55 @@ export function QcScreen({
             </div>
 
             <div>
-              <p className="field-label">Review captured fields</p>
-              <p className="mb-3 text-xs opacity-60">Missing fields are highlighted. Editing here flags the record as edited for verification and marks that field source: manual.</p>
+              <p className="field-label">Captured fields</p>
+              <p className="mb-3 text-xs opacity-60">
+                Jump to transcript to check a value against its evidence. Editing a field here marks it Edited and keeps the record in QC for
+                verification.
+              </p>
               <div className="space-y-3">
-                {(Object.keys(FIELD_DISPLAY_LABELS) as Array<keyof ManualExtractedFields>).map((key) => {
+                {QC_FIELD_ORDER.map((key) => {
                   const missing = selected.missing_fields.includes(key);
                   const fieldMeta = effective.field_confidence?.[key];
-                  const isHighRisk = HIGH_RISK_FIELD_SET.has(key);
+                  const status = deriveQcFieldStatus(fieldMeta);
                   return (
                     <div key={key} className={missing ? "rounded-2xl border border-yellow-300/60 bg-yellow-200/10 p-3" : ""}>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold opacity-90">{FIELD_DISPLAY_LABELS[key]}</span>
+                        <StatusDot label={status} tone={QC_FIELD_STATUS_TONE[status]} className="shrink-0" />
+                      </div>
                       <TextAreaField
                         label={FIELD_DISPLAY_LABELS[key]}
+                        hideLabel
                         value={effective[key] === UNKNOWN_FIELD_VALUE ? "" : String(effective[key])}
                         placeholder={missing ? "Not captured" : undefined}
                         onChange={(event) => updateRecord(selected, { [key]: event.target.value } as Partial<ExtractedFields>)}
                         rows={2}
                       />
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
-                        {isHighRisk && <StatusBadge label="High-risk field" tone="neutral" />}
-                        {fieldMeta && <StatusBadge label={`Source: ${SOURCE_LABELS[fieldMeta.source]}`} tone="neutral" />}
-                        {fieldMeta && fieldMeta.confidence !== "unknown" && (
-                          <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />
-                        )}
-                        {fieldMeta && (fieldMeta.requiresReview ? <StatusBadge label="Review required" tone="warn" /> : <StatusBadge label="Ready" tone="good" />)}
-                      </div>
-                      {fieldMeta?.evidence && <p className="mt-1 text-xs opacity-60">Evidence: &ldquo;{fieldMeta.evidence}&rdquo;</p>}
+                      {/* Source + capture confidence stay as small detail text (QC triage is where confidence is operationally useful), never as chips. */}
+                      {fieldMeta && (
+                        <p className="mt-1 text-[11px] opacity-60">
+                          {SOURCE_LABELS[fieldMeta.source]}
+                          {fieldMeta.confidence !== "unknown" && ` · ${fieldMeta.confidence} confidence`}
+                        </p>
+                      )}
+                      {fieldMeta?.evidence ? (
+                        <button
+                          type="button"
+                          className="mt-1 line-clamp-1 text-left text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline"
+                          onClick={() => jumpToEvidence(fieldMeta.evidence)}
+                        >
+                          Jump to transcript: &ldquo;{fieldMeta.evidence}&rdquo;
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="mt-1 flex items-center gap-1 text-left text-xs font-semibold opacity-60 hover:opacity-90"
+                          onClick={() => jumpToEvidence(undefined)}
+                        >
+                          <SearchX className="h-3.5 w-3.5 shrink-0" />
+                          No transcript evidence for this field
+                        </button>
+                      )}
                       {fieldMeta?.reason && (fieldMeta.confidence === "low" || fieldMeta.confidence === "unknown") && (
                         <p className="mt-1 text-xs opacity-60">{fieldMeta.reason}</p>
                       )}
@@ -406,15 +589,24 @@ export function QcScreen({
             />
 
             {selected.qc_status !== "Approved" ? (
-              <PrimaryButton fullWidth icon={<CheckCircle2 className="h-5 w-5" />} onClick={() => markComplete(selected)}>
+              <PrimaryButton fullWidth icon={<CheckCircle2 className="h-5 w-5" />} onClick={requestMarkComplete}>
                 Mark reviewed
               </PrimaryButton>
             ) : (
-              <StatusBadge label="QC complete" tone="good" />
+              <StatusDot label="QC complete" tone="good" />
             )}
           </div>
         </DetailModal>
       )}
+
+      <ConfirmDialog
+        open={confirmingReview}
+        title="Mark this record reviewed?"
+        body="Confirm you have reviewed the transcript, captured fields and QC reasons."
+        confirmLabel="Yes, mark reviewed"
+        onConfirm={confirmMarkComplete}
+        onCancel={() => setConfirmingReview(false)}
+      />
     </OneScreenShell>
   );
 }

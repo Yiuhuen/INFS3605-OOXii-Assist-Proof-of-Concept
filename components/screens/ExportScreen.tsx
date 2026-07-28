@@ -3,9 +3,9 @@
 import { useState } from "react";
 import { Check, Download, ShieldCheck } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
-import { LONGLIST_CSV_COLUMNS } from "@/lib/csv";
+import { AUDIT_CSV_COLUMNS, LONGLIST_CSV_COLUMNS } from "@/lib/csv";
 import { recordNeedsQc } from "@/lib/qc";
-import { DangerButton, DetailModal, MetricCard, PrimaryButton, SecondaryButton, WarningCard } from "@/components/ui";
+import { DangerButton, DetailModal, PrimaryButton, SecondaryButton, WarningCard } from "@/components/ui";
 import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
 
 /** "id"/"qc" are acronyms and stay fully uppercase; only the first word is otherwise capitalised (sentence case) — matches column names used elsewhere in the app. */
@@ -35,27 +35,19 @@ function FieldChecklist({ fields }: { fields: readonly string[] }) {
   );
 }
 
-/** Presentation-only grouping of AUDIT_CSV_COLUMNS for the "included fields" detail modal — keep in sync with lib/csv.ts if that list changes. */
+/**
+ * Presentation-only grouping of AUDIT_CSV_COLUMNS for the "included fields"
+ * detail modal — keep in sync with lib/csv.ts if that list changes. This
+ * export is long/tidy format: one row per record PER FIELD (see the note
+ * rendered above the groups below), so these columns describe a single
+ * field-row, not a whole record.
+ */
 const AUDIT_FIELD_GROUPS: Array<{ title: string; fields: readonly string[] }> = [
-  { title: "Core test fields", fields: LONGLIST_CSV_COLUMNS },
-  {
-    title: "Transcript fields",
-    fields: ["language", "raw_transcript_language", "raw_transcript_text", "english_processing_transcript", "corrected_transcript_text"]
-  },
-  {
-    title: "QC and confidence fields",
-    fields: [
-      "confidence_score",
-      "missing_fields",
-      "edited_by_user",
-      "requires_qc_verification",
-      "unclear_segments",
-      "has_unvisited_prompts",
-      "demo_helper_used"
-    ]
-  },
-  { title: "Recording fields", fields: ["recording_status", "manual_override_reason", "prompt_markers"] },
-  { title: "Sync and timestamp fields", fields: ["processing_status", "sync_attempts", "created_at", "updated_at"] }
+  { title: "Record identity", fields: ["record_id", "anonymous_client_id", "demo_record", "created_at", "outreach_session", "tester_label", "language_pack"] },
+  { title: "Field-level evidence", fields: ["field_name", "field_value", "field_source", "field_confidence", "field_status", "evidence_quote"] },
+  { title: "Review flags", fields: ["manually_edited", "requires_review", "qc_reason"] },
+  { title: "Prompt coverage", fields: ["prompt_step_id", "prompt_viewed", "prompt_recorded"] },
+  { title: "Recording and sync", fields: ["recording_mode", "transcript_available", "saved_locally", "sync_status", "export_ready"] }
 ];
 
 export function ExportScreen({
@@ -80,6 +72,22 @@ export function ExportScreen({
   const ready = records.length - needsQc;
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [fieldsModal, setFieldsModal] = useState<"longlist" | "audit" | null>(null);
+  /** Set only when a download actually fires this session — never pre-filled, so "Not yet generated" is honest until a real export happens. */
+  const [lastGeneratedAt, setLastGeneratedAt] = useState<string | null>(null);
+
+  function stampGenerated() {
+    setLastGeneratedAt(new Date().toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }));
+  }
+
+  function handleExportLonglist() {
+    onExportLonglist();
+    stampGenerated();
+  }
+
+  function handleExportAudit() {
+    onExportAudit();
+    stampGenerated();
+  }
 
   return (
     <OneScreenShell
@@ -121,50 +129,50 @@ export function ExportScreen({
       }
     >
       <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-y-auto">
-        <div className="grid shrink-0 grid-cols-2 gap-2">
-          <MetricCard value={records.length} label="Total records" />
-          <MetricCard value={ready} label="Ready to export" tone="good" />
-          <MetricCard value={needsQc} label="Needs QC" tone="danger" />
-          <MetricCard value={pending} label="Pending sync" tone="gold" />
+        {/* One compact status line — answers "what can OOXii safely export
+            now?" with counts, not a metrics dashboard. */}
+        <div className="shrink-0 rounded-xl border border-field-line bg-field-card px-3 py-2.5">
+          <p className="text-sm font-bold">
+            {records.length} record{records.length === 1 ? "" : "s"} · {ready} ready for export · {needsQc} need{needsQc === 1 ? "s" : ""} QC ·{" "}
+            {pending} pending sync
+          </p>
+          <p className="mt-0.5 text-xs opacity-60">{lastGeneratedAt ? `Last generated: ${lastGeneratedAt}` : "Not yet generated this session"}</p>
         </div>
 
-        {needsQc > 0 && (
-          <div className="shrink-0">
-            <WarningCard>
-              <span className="line-clamp-1">Some records still require review before final reporting.</span>
-            </WarningCard>
-          </div>
-        )}
+        <p className="flex shrink-0 items-center gap-1.5 text-xs opacity-70">
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-field-muted" />
+          Exports exclude names, DOB, phone, address and GPS.
+        </p>
 
         {/* shrink-0 so the export cards can never be clipped — the content column's fallback scroll keeps them reachable on tiny viewports. */}
         <div className="flex shrink-0 flex-col gap-2">
           <div className="field-card shrink-0">
             <div className="flex items-center justify-between gap-2">
-              <p className="line-clamp-1 text-sm font-bold">A. OOXii Data Longlist</p>
+              <p className="line-clamp-1 text-sm font-bold">OOXii Data Longlist</p>
               <button className="shrink-0 text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline" onClick={() => setFieldsModal("longlist")}>
                 Fields ({LONGLIST_CSV_COLUMNS.length})
               </button>
             </div>
-            <p className="mt-1 line-clamp-2 text-xs opacity-70">Core operational dataset — no raw transcript text, anonymous IDs only.</p>
-            <PrimaryButton fullWidth className="mt-2 py-2 text-sm" icon={<Download className="h-4 w-4" />} disabled={records.length === 0} onClick={onExportLonglist}>
-              Download Longlist
+            <PrimaryButton fullWidth className="mt-2 py-2 text-sm" icon={<Download className="h-4 w-4" />} disabled={records.length === 0} onClick={handleExportLonglist}>
+              Export OOXii Data Longlist
             </PrimaryButton>
+            <p className="mt-1.5 line-clamp-1 text-xs opacity-70">One row per record.</p>
           </div>
 
           <div className="field-card shrink-0">
             <div className="flex items-center justify-between gap-2">
-              <p className="line-clamp-1 text-sm font-bold">B. Full Audit Longlist</p>
+              <p className="line-clamp-1 text-sm font-bold">Full Audit Longlist</p>
               <button
                 className="shrink-0 text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline"
                 onClick={() => setFieldsModal("audit")}
               >
-                Fields
+                Fields ({AUDIT_CSV_COLUMNS.length})
               </button>
             </div>
-            <p className="mt-1 line-clamp-2 text-xs opacity-70">Full non-personal audit trail — transcripts, markers, confidence flags, timestamps.</p>
-            <PrimaryButton fullWidth className="mt-2 py-2 text-sm" icon={<Download className="h-4 w-4" />} disabled={records.length === 0} onClick={onExportAudit}>
-              Download Audit Longlist
+            <PrimaryButton fullWidth className="mt-2 py-2 text-sm" icon={<Download className="h-4 w-4" />} disabled={records.length === 0} onClick={handleExportAudit}>
+              Export Full Audit Longlist
             </PrimaryButton>
+            <p className="mt-1.5 line-clamp-1 text-xs opacity-70">One row per field with evidence and QC trail.</p>
           </div>
         </div>
       </div>
@@ -175,15 +183,13 @@ export function ExportScreen({
 
       <DetailModal open={fieldsModal === "audit"} title="Full Audit Longlist fields" onClose={() => setFieldsModal(null)}>
         <div className="space-y-4">
-          <div className="rounded-2xl border border-field-line bg-field-surface p-3">
-            <p className="flex items-center gap-1.5 text-xs opacity-80">
-              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-              No names, DOB, phone numbers, addresses, or GPS are collected or exported.
-            </p>
-          </div>
+          <p className="text-xs opacity-70">
+            One row per saved record <span className="font-bold">per field</span> — a 12-record test set with 8 tracked
+            fields produces 96 rows, not 12.
+          </p>
           {AUDIT_FIELD_GROUPS.map((group) => (
             <div key={group.title}>
-              <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-field-muted">
+              <p className="mb-1.5 text-xs font-bold text-field-muted">
                 {group.title} ({group.fields.length})
               </p>
               <FieldChecklist fields={group.fields} />

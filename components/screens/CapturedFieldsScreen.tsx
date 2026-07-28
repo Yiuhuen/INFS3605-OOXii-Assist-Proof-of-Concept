@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { FlaskConical, PencilLine, Save, ShieldAlert, Sparkles, Zap } from "lucide-react";
-import { UNKNOWN_FIELD_VALUE, type ExtractedFields, type ExtractionSafetyStatus, type FieldConfidence, type FieldConfidenceLevel, type ManualExtractedFields, type ProcessingStatus } from "@/lib/types";
-import { processingStatusLabel, processingStatusTone } from "@/lib/qc";
+import { Save, ScrollText, ShieldAlert, Sparkles } from "lucide-react";
+import { UNKNOWN_FIELD_VALUE, type ExtractedFields, type ExtractionSafetyStatus, type FieldConfidence, type ManualExtractedFields } from "@/lib/types";
 import { FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
 import { HIGH_RISK_EXTRACTED_FIELDS } from "@/lib/transcriptQuality";
-import { CheckboxCard, DetailModal, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, WarningCard, type BadgeTone } from "@/components/ui";
+import { CheckboxCard, DetailModal, InfoCard, PrimaryButton, SecondaryButton, StatusDot, WarningCard, type StatusDotTone } from "@/components/ui";
 import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
+import { HighlightedTranscript } from "@/components/TranscriptHighlight";
 
 const HIGH_RISK_FIELD_SET = new Set<string>(HIGH_RISK_EXTRACTED_FIELDS);
 
@@ -21,18 +21,14 @@ const KEY_FIELD_ORDER: Array<keyof ManualExtractedFields> = [
   "glasses_selected"
 ];
 
+/** Review priority (spec §8): not-captured fields first, then anything still needing a look, then everything else — so a reviewer clears the gaps before skimming what's already settled. */
+const REVIEW_PRIORITY: Record<"unknown" | "needs_review" | "other", number> = { unknown: 0, needs_review: 1, other: 2 };
+
 const SOURCE_LABELS: Record<"manual" | "transcript" | "corrected_transcript" | "unknown", string> = {
   manual: "Manual entry",
-  transcript: "Transcript",
-  corrected_transcript: "Corrected transcript",
+  transcript: "Auto-filled from transcript",
+  corrected_transcript: "Auto-filled from corrected transcript",
   unknown: "Not captured"
-};
-
-const CONFIDENCE_TONE: Record<FieldConfidenceLevel, BadgeTone> = {
-  high: "good",
-  medium: "neutral",
-  low: "warn",
-  unknown: "warn"
 };
 
 /**
@@ -52,12 +48,13 @@ const CONFIDENCE_TONE: Record<FieldConfidenceLevel, BadgeTone> = {
  */
 type FieldReviewStatus = "suggested" | "reviewed" | "needs_review" | "manual" | "unknown";
 
-const STATUS_PRESENTATION: Record<FieldReviewStatus, { label: string; tone: BadgeTone }> = {
-  suggested: { label: "Suggested", tone: "neutral" },
+/** Closed status vocabulary (spec): Captured / Reviewed / Check / Edited / Missing — one dot per row, sentence case. */
+const STATUS_PRESENTATION: Record<FieldReviewStatus, { label: string; tone: StatusDotTone }> = {
+  suggested: { label: "Captured", tone: "neutral" },
   reviewed: { label: "Reviewed", tone: "good" },
-  needs_review: { label: "Needs review", tone: "warn" },
-  manual: { label: "Manual edit", tone: "warn" },
-  unknown: { label: "Unknown", tone: "neutral" }
+  needs_review: { label: "Check", tone: "warn" },
+  manual: { label: "Edited", tone: "neutral" },
+  unknown: { label: "Missing", tone: "muted" }
 };
 
 function deriveFieldStatus(value: string, meta: FieldConfidence | undefined, confirmed: boolean): FieldReviewStatus {
@@ -72,7 +69,6 @@ export function CapturedFieldsScreen({
   clientId,
   extracted,
   editedFields,
-  processingStatus,
   isOnline,
   onEditField,
   onBackToTranscript,
@@ -84,12 +80,12 @@ export function CapturedFieldsScreen({
   onToggleFieldsReviewed,
   fieldSuggestions,
   onUseSuggestion,
-  demoHelperUsed
+  demoHelperUsed,
+  transcriptText
 }: {
   clientId: string;
   extracted: ExtractedFields;
   editedFields: ExtractedFields | null;
-  processingStatus: ProcessingStatus;
   isOnline: boolean;
   onEditField: (key: keyof ManualExtractedFields, value: string) => void;
   onBackToTranscript: () => void;
@@ -108,10 +104,12 @@ export function CapturedFieldsScreen({
   onUseSuggestion: (key: keyof ManualExtractedFields) => void;
   /** True when the dev/demo-only "Insert sample transcript for demo" helper (lib/demoHelpers.ts) supplied this record's transcript — never set by real recording/STT. */
   demoHelperUsed: boolean;
+  /** Corrected transcript (falling back to the English processing copy, then raw) — spec §8: lets a field jump straight to its supporting evidence instead of the tester re-reading/re-listening to the whole recording. */
+  transcriptText: string;
 }) {
   const [allFieldsOpen, setAllFieldsOpen] = useState(false);
-  /** Which fields' evidence quotes are expanded past the one-line preview. */
-  const [expandedEvidence, setExpandedEvidence] = useState<Partial<Record<keyof ManualExtractedFields, boolean>>>({});
+  /** Field whose evidence is currently spotlighted in the transcript modal (spec §8) — null when the modal is closed. */
+  const [evidenceField, setEvidenceField] = useState<keyof ManualExtractedFields | null>(null);
   const effective = editedFields ?? extracted;
   const lowConfidence = effective.confidence_score < 0.7 || effective.missing_fields.length > 0;
   const qcRequired = lowConfidence || Boolean(editedFields) || extractionSafetyStatus === "draft_review_required";
@@ -121,18 +119,34 @@ export function CapturedFieldsScreen({
   // it as perpetually "unknown" would make the summary read scarier than the
   // clinical reality. Every clinical field (the 6 key ones + cataract) counts.
   const countedKeys = allFieldKeys.filter((key) => key !== "additional_notes");
-  const statusByKey = new Map(
+  const statusByKey = new Map<keyof ManualExtractedFields, FieldReviewStatus>(
     countedKeys.map((key) => [key, deriveFieldStatus(String(effective[key] ?? ""), effective.field_confidence?.[key], fieldsReviewedConfirmed)])
   );
   const statuses = [...statusByKey.values()];
-  const suggestedCount = statuses.filter((status) => status === "suggested").length;
-  // A manual entry is by definition tester-reviewed — they typed it. It still
-  // carries its own "Manual edit" badge (and QC flag when high-risk) so it is
-  // never mistaken for a transcript-backed value.
-  const reviewedCount = statuses.filter((status) => status === "reviewed" || status === "manual").length;
+  // "Captured" = a value exists and nothing flags it for a check — covers
+  // auto-filled, tester-confirmed, and manually entered values. Edited values
+  // still carry their own "Edited" row status (and QC flag when high-risk) so
+  // they are never mistaken for transcript-backed values.
+  const capturedCount = statuses.filter((status) => status === "suggested" || status === "reviewed" || status === "manual").length;
+  const editedCount = statuses.filter((status) => status === "manual").length;
   const needsReviewCount = statuses.filter((status) => status === "needs_review").length;
   const unknownCount = statuses.filter((status) => status === "unknown").length;
   const otherFieldKeys = allFieldKeys.filter((key) => !KEY_FIELD_ORDER.includes(key));
+
+  /** Review order (spec §8): not-captured first, then anything needing a look, then everything else — so the reviewer clears gaps before skimming what's already settled. Stable sort preserves each group's original order. */
+  function byReviewPriority(a: keyof ManualExtractedFields, b: keyof ManualExtractedFields): number {
+    const statusA = statusByKey.get(a);
+    const statusB = statusByKey.get(b);
+    const priorityA = statusA === "unknown" ? REVIEW_PRIORITY.unknown : statusA === "needs_review" ? REVIEW_PRIORITY.needs_review : REVIEW_PRIORITY.other;
+    const priorityB = statusB === "unknown" ? REVIEW_PRIORITY.unknown : statusB === "needs_review" ? REVIEW_PRIORITY.needs_review : REVIEW_PRIORITY.other;
+    return priorityA - priorityB;
+  }
+  const sortedKeyFields = [...KEY_FIELD_ORDER].sort(byReviewPriority);
+  const sortedAllFields = [...KEY_FIELD_ORDER, ...otherFieldKeys].sort(byReviewPriority);
+
+  function openTranscriptEvidence(key: keyof ManualExtractedFields) {
+    setEvidenceField(key);
+  }
 
   function renderFieldCard(key: keyof ManualExtractedFields) {
     const rawValue = String(effective[key] ?? "");
@@ -141,18 +155,27 @@ export function CapturedFieldsScreen({
     const isHighRisk = HIGH_RISK_FIELD_SET.has(key);
     const hasValue = status !== "unknown";
     const attention = status === "needs_review" || (status === "unknown" && isHighRisk);
-    const evidenceExpanded = Boolean(expandedEvidence[key]);
     const presentation = STATUS_PRESENTATION[status];
+
+    /** Source + confidence live in this small evidence/detail line, never as separate chips. Confidence only for transcript-derived values — meaningless for a hand-typed entry. */
+    const detailParts: string[] = [];
+    if (hasValue && fieldMeta) {
+      detailParts.push(SOURCE_LABELS[fieldMeta.source]);
+      if (fieldMeta.source !== "manual" && fieldMeta.confidence !== "unknown") {
+        detailParts.push(`${fieldMeta.confidence} confidence`);
+      }
+      if (status === "manual" && isHighRisk) detailParts.push("Needs QC");
+    }
 
     return (
       <label
         key={key}
         className={`block rounded-xl border px-3 py-2.5 ${attention ? "border-yellow-300/60 bg-yellow-200/10" : "border-field-line bg-field-card"}`}
       >
-        {/* Full label, never ellipsized — "Current glasses" and "Glasses selected / dispensed" must always be distinguishable. Wraps to a second line on narrow screens instead of truncating. */}
+        {/* Full label, never ellipsized — "Current glasses" and "Glasses selected / dispensed" must always be distinguishable. Wraps to a second line on narrow screens instead of truncating. One status indicator per row. */}
         <span className="flex items-start justify-between gap-2">
           <span className="text-xs font-bold leading-snug opacity-90">{FIELD_DISPLAY_LABELS[key]}</span>
-          <StatusBadge label={presentation.label} tone={presentation.tone} />
+          <StatusDot label={presentation.label} tone={presentation.tone} className="shrink-0" />
         </span>
         <input
           className="field-input mt-1.5 min-h-[2.75rem] px-3 text-sm"
@@ -160,36 +183,23 @@ export function CapturedFieldsScreen({
           placeholder={hasValue ? undefined : "Not captured"}
           onChange={(event) => onEditField(key, event.target.value)}
         />
-        <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
-          {status === "unknown" && isHighRisk && <StatusBadge label="Needs review" tone="warn" />}
-          {status === "manual" && isHighRisk && <StatusBadge label="Needs QC" tone="danger" />}
-          {isHighRisk && <StatusBadge label="High-risk" tone="neutral" icon={<ShieldAlert className="h-3 w-3" />} />}
-          {/* Source shown only when there is something to attribute — "Source: Not captured" next to an Unknown badge is duplicate noise. */}
-          {hasValue && fieldMeta && <StatusBadge label={SOURCE_LABELS[fieldMeta.source]} tone="neutral" icon={fieldMeta.source === "manual" ? <PencilLine className="h-3 w-3" /> : undefined} />}
-          {/* Confidence only for transcript-derived values — extraction confidence is meaningless for a hand-typed entry, and "unknown" confidence for an empty field says nothing the Unknown badge doesn't. */}
-          {hasValue && fieldMeta && fieldMeta.source !== "manual" && fieldMeta.confidence !== "unknown" && (
-            <StatusBadge label={`Confidence: ${fieldMeta.confidence}`} tone={CONFIDENCE_TONE[fieldMeta.confidence]} />
-          )}
-        </div>
+        {detailParts.length > 0 && <p className="mt-1 text-[11px] opacity-60">{detailParts.join(" · ")}</p>}
         {fieldMeta?.evidence && hasValue && (
           <button
             type="button"
-            className="mt-1 block w-full text-left text-[11px] opacity-70 hover:opacity-100"
+            className="mt-1 flex w-full items-center gap-1 text-left text-[11px] font-bold text-[var(--gold)] underline-offset-2 hover:underline"
             onClick={(event) => {
               event.preventDefault();
-              setExpandedEvidence((prev) => ({ ...prev, [key]: !prev[key] }));
+              openTranscriptEvidence(key);
             }}
-            title={evidenceExpanded ? "Collapse evidence" : "Show full evidence"}
+            title="Jump to this evidence in the transcript"
           >
-            <span className={evidenceExpanded ? "select-text break-words" : "line-clamp-1 break-words"}>
-              Evidence: &ldquo;{fieldMeta.evidence}&rdquo;
-            </span>
+            <ScrollText className="h-3 w-3 shrink-0" />
+            <span className="line-clamp-1 break-words">View in transcript: &ldquo;{fieldMeta.evidence}&rdquo;</span>
           </button>
         )}
         {status === "unknown" && (
-          <p className="mt-1 text-[11px] opacity-60">
-            {fieldMeta?.reason ?? "Not captured from transcript — enter manually or leave for QC."}
-          </p>
+          <p className="mt-1 text-[11px] opacity-60">No transcript evidence found — enter manually or leave for QC.</p>
         )}
         {status !== "unknown" && fieldMeta?.reason && <p className="mt-1 text-[11px] opacity-60">{fieldMeta.reason}</p>}
         {fieldSuggestions[key] && (
@@ -234,26 +244,19 @@ export function CapturedFieldsScreen({
       }
     >
       <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto">
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <StatusBadge label={processingStatusLabel(processingStatus)} tone={processingStatusTone(processingStatus)} />
-          <span className={`status-pill normal-case tracking-normal ${lowConfidence ? "badge-warn" : "badge-good"}`}>
-            <Zap className="h-3.5 w-3.5" />
-            {Math.round(effective.confidence_score * 100)}%
-          </span>
-          {demoHelperUsed && <StatusBadge label="Demo helper" tone="danger" icon={<FlaskConical className="h-3.5 w-3.5" />} />}
-          {qcRequired && processingStatus !== "needs_qc" && <StatusBadge label="Needs QC" tone="danger" />}
-          {/* "Ready to save" appears ONLY after the tester's explicit confirmation — a screen full of extracted values is never "ready" on its own. */}
-          {fieldsReviewedConfirmed && <StatusBadge label="Ready to save" tone="good" />}
-        </div>
-
+        {/* Plain-text summary — concrete counts, no confidence pill, no badge
+            row. Capture confidence stays in the export/audit metadata and QC
+            triage, where it is operationally useful. */}
         <div className="shrink-0">
-          <p className="text-xs">
-            <span className="font-bold opacity-90">{suggestedCount} suggested</span> ·{" "}
-            <span className="font-bold text-[var(--good)]">{reviewedCount} reviewed</span> ·{" "}
-            <span className="font-bold text-[var(--gold)]">{needsReviewCount} need review</span> ·{" "}
-            <span className="font-bold opacity-70">{unknownCount} unknown</span>
+          <p className="text-sm font-bold">
+            {capturedCount} captured · {unknownCount} missing · {needsReviewCount} check
+            {editedCount > 0 && ` · ${editedCount} edited`}
           </p>
-          <p className="mt-0.5 text-[11px] opacity-60">These are draft fields from the transcript. Confirm before saving.</p>
+          <p className="mt-0.5 text-[11px] opacity-60">
+            Draft fields from the transcript — confirm before saving.
+            {qcRequired && " This record stays flagged for QC after saving."}
+            {demoHelperUsed && " Demo transcript in use."}
+          </p>
         </div>
 
         {extractionSafetyStatus === "draft_review_required" && (
@@ -288,14 +291,29 @@ export function CapturedFieldsScreen({
             tester which glasses question they are answering. Two columns only
             from sm (640px) up, where full labels fit without ellipsis. */}
         <div className="grid shrink-0 grid-cols-1 content-start gap-2 sm:grid-cols-2">
-          {KEY_FIELD_ORDER.map((key) => renderFieldCard(key))}
+          {sortedKeyFields.map((key) => renderFieldCard(key))}
         </div>
       </div>
 
       <DetailModal open={allFieldsOpen} title="All captured fields" onClose={() => setAllFieldsOpen(false)}>
         <div className="space-y-3">
           <p className="text-xs opacity-70">Editing fields does not change the source transcript. Edited fields are flagged for QC review.</p>
-          {[...KEY_FIELD_ORDER, ...otherFieldKeys].map((key) => renderFieldCard(key))}
+          {sortedAllFields.map((key) => renderFieldCard(key))}
+        </div>
+      </DetailModal>
+
+      <DetailModal
+        open={evidenceField !== null}
+        title={evidenceField ? `Transcript — ${FIELD_DISPLAY_LABELS[evidenceField]}` : "Transcript"}
+        onClose={() => setEvidenceField(null)}
+      >
+        <div className="space-y-3">
+          <p className="text-xs opacity-70">
+            Highlighted phrase is the evidence for this field — no need to re-read the whole recording.
+          </p>
+          <div className="ink-panel text-sm">
+            <HighlightedTranscript text={transcriptText} focusPhrase={evidenceField ? effective.field_confidence?.[evidenceField]?.evidence : undefined} />
+          </div>
         </div>
       </DetailModal>
     </OneScreenShell>

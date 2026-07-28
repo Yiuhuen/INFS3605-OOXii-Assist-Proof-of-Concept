@@ -49,6 +49,7 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     client_id: record.client_id ?? "",
     tester_id: record.tester_id ?? "",
     deployment_site: record.deployment_site ?? record.client_snapshot?.location_site ?? "",
+    outreach_session: record.outreach_session ?? "",
     language: record.language ?? "en",
     status: record.status ?? "Draft",
     sync_status: record.sync_status ?? "Pending sync",
@@ -90,6 +91,9 @@ function normalizeRecord(record: LegacyTestRecord): TestRecord {
     demo_helper_used: record.demo_helper_used ?? false,
     recording_attempt_number: record.recording_attempt_number ?? 1,
     rerecord_used: record.rerecord_used ?? false,
+    demo_record: record.demo_record ?? false,
+    demo_dataset_version: record.demo_dataset_version ?? "",
+    language_pack_label: record.language_pack_label ?? "",
     client_snapshot: {
       id: record.client_snapshot?.id ?? "",
       age_band: record.client_snapshot?.age_band ?? "",
@@ -126,6 +130,25 @@ export function saveRecord(record: TestRecord) {
 export function clearRecords() {
   if (typeof window === "undefined") return;
   localStorage.removeItem(RECORDS_KEY);
+}
+
+/**
+ * Adds synthetic demo records (see lib/demoRecords.ts) without touching any
+ * real, tester-created records. Any previously-seeded demo records are
+ * replaced (not duplicated) so re-loading the demo dataset is idempotent —
+ * real records (demo_record !== true) are always preserved untouched.
+ */
+export function appendDemoRecords(newRecords: TestRecord[]) {
+  if (typeof window === "undefined") return;
+  const existing = loadRecords().filter((record) => !record.demo_record);
+  localStorage.setItem(RECORDS_KEY, JSON.stringify([...newRecords, ...existing]));
+}
+
+/** Removes only synthetic demo records (demo_record === true), leaving every real record untouched. */
+export function clearDemoRecordsOnly() {
+  if (typeof window === "undefined") return;
+  const remaining = loadRecords().filter((record) => !record.demo_record);
+  localStorage.setItem(RECORDS_KEY, JSON.stringify(remaining));
 }
 
 export function loadLanguagePacks(): LanguagePack[] {

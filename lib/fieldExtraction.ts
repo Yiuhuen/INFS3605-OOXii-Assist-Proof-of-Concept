@@ -273,9 +273,15 @@ const CURRENT_GLASSES_RULE: PolarityRule = {
 
 const CATARACT_HISTORY_RULE: PolarityRule = {
   positivePhrases: ["has cataract", "had cataract", "cataract history", "cataract surgery", "cloudy lens"],
-  negativePhrases: ["no cataract", "no history of cataract", "never had cataract"],
+  // "no cataract surgery" / "not had cataract surgery" must be listed here
+  // (not just as the shorter "no cataract"/"never had cataract" below) —
+  // detectPolarity tries phrases longest-first and blanks out whatever it
+  // matches, so without a negative phrase at least as long as the positive
+  // "cataract surgery" (16 chars), that positive phrase would win the race
+  // and "The client has not had cataract surgery" would misread as Yes.
+  negativePhrases: ["no cataract", "no history of cataract", "never had cataract", "no cataract surgery", "not had cataract surgery"],
   aliasPositivePhrases: ["has cataracts", "had cataracts", "cataracts history", "cataracts surgery", "has contacts", "had contacts", "cat tracks"],
-  aliasNegativePhrases: ["no cataracts", "never had cataracts"],
+  aliasNegativePhrases: ["no cataracts", "never had cataracts", "no cataracts surgery", "not had cataracts surgery"],
   positiveValue: "Yes",
   negativeValue: "No"
 };
@@ -457,6 +463,8 @@ function formatDiopter(sign: string | undefined, whole: string, decimal?: string
 }
 
 const GLASSES_SELECTION_VERB = /\b(?:selected|dispensed|gave)\b[^.\n]{0,40}?\bglasses\b|\bglasses\b[^.\n]{0,40}?\bselected\b/i;
+/** "No glasses (were) dispensed/selected today" — matches the exact demo-record phrasing (lib/demoRecords.ts C-102B/C-111L: "no glasses were dispensed today" -> "No glasses dispensed") that was previously only ever hand-authored, never actually derived by this extractor. */
+const GLASSES_NOT_DISPENSED_PATTERN = /\bno\b[^.\n]{0,20}?\bglasses\b[^.\n]{0,20}?\b(?:dispensed|selected)\b/i;
 const SIGNED_DIOPTER_PATTERN = /([+-])\s?(\d+)(?:\.(\d+))?/;
 const WORDED_SIGNED_DIOPTER_PATTERN = new RegExp(`\\b(plus|minus)\\s+(${DIOPTER_WORD_ALT})(?:\\s+point\\s+(${DIOPTER_WORD_ALT}))?\\b`, "i");
 const WORDED_BARE_DECIMAL_PATTERN = new RegExp(`\\b(${DIOPTER_WORD_ALT})\\s+point\\s+(${DIOPTER_WORD_ALT})\\b`, "i");
@@ -513,6 +521,21 @@ function matchGlassesSelected(stepText: string, wholeText: string): FieldMatch {
       evidence: bareDecimal[0].trim(),
       stepId: GLASSES_STEP_ID,
       reason: "Bare lens power without an explicit +/- sign — confirm polarity against the audio."
+    };
+  }
+
+  // Tried before the generic positive verb match below: "no glasses were
+  // dispensed" contains neither of GLASSES_SELECTION_VERB's two orderings
+  // (dispensed-then-glasses or glasses-then-selected), so there's no
+  // ordering conflict between the two checks — this only ever fires on a
+  // transcript the positive branch would otherwise have missed entirely.
+  const notDispensedMatch = GLASSES_NOT_DISPENSED_PATTERN.exec(primaryText) ?? GLASSES_NOT_DISPENSED_PATTERN.exec(wholeText);
+  if (notDispensedMatch) {
+    return {
+      value: "No glasses dispensed",
+      matchLevel: stepText.trim() && GLASSES_NOT_DISPENSED_PATTERN.test(stepText) ? "step" : "whole",
+      evidence: notDispensedMatch[0].trim(),
+      stepId: GLASSES_STEP_ID
     };
   }
 
