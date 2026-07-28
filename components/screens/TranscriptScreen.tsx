@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, FlaskConical, Languages, ListChecks, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, FlaskConical, ListChecks, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
 import type {
   CorrectionHistoryEntry,
   LanguageCode,
@@ -17,7 +17,7 @@ import type {
   TranslationSafetyReport,
   UnclearSegment
 } from "@/lib/types";
-import { Disclosure, DetailModal, InfoCard, PrimaryButton, SecondaryButton, StatusBadge, StatusDot, TranscriptTab, type BadgeTone, type StatusDotTone } from "@/components/ui";
+import { Disclosure, DetailModal, InfoCard, PrimaryButton, SecondaryButton, StatusDot, TranscriptTab, type StatusDotTone } from "@/components/ui";
 import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
 import { HighlightedTranscript } from "@/components/TranscriptHighlight";
 import { extractFieldsFromTranscript } from "@/lib/fieldExtraction";
@@ -78,7 +78,7 @@ const REVIEW_STATUS_TONES: Record<TranscriptReviewStatus, StatusDotTone> = {
   sent_to_qc: "danger"
 };
 
-function severityTone(severity: TranscriptQualityFlag["severity"]): BadgeTone {
+function severityDotTone(severity: TranscriptQualityFlag["severity"]): StatusDotTone {
   if (severity === "critical") return "danger";
   if (severity === "warning") return "warn";
   return "neutral";
@@ -101,10 +101,11 @@ function QualityFlagCard({
 }) {
   return (
     <div className="field-card space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge label={FLAG_TYPE_LABELS[flag.type]} tone={severityTone(flag.severity)} icon={<AlertTriangle className="h-3.5 w-3.5" />} />
-        {flag.translationRiskType && <StatusBadge label="Translation" tone="neutral" icon={<Languages className="h-3.5 w-3.5" />} />}
-        {isIgnored && <StatusBadge label="Ignored" tone="neutral" />}
+      {/* One dot per alert, extra context as plain text — never a pill cluster. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <StatusDot label={FLAG_TYPE_LABELS[flag.type]} tone={severityDotTone(flag.severity)} />
+        {flag.translationRiskType && <span className="text-[11px] font-semibold opacity-60">Translation</span>}
+        {isIgnored && <span className="text-[11px] font-semibold opacity-60">Ignored</span>}
       </div>
       <p className="text-sm">
         <span className="font-bold">Detected:</span> &ldquo;{flag.originalText}&rdquo;
@@ -404,7 +405,7 @@ export function TranscriptScreen({
           <div>
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold text-field-muted">Raw draft transcript ({rawTranscriptLanguageName})</p>
-              <StatusBadge label="Preserved" tone="good" icon={<ShieldCheck className="h-3.5 w-3.5" />} />
+              <StatusDot label="Preserved" tone="good" />
             </div>
             <p className="mt-1 text-xs opacity-60">Read-only — generated from audio, never edited or overwritten.</p>
             <pre className="ink-panel mt-2 whitespace-pre-wrap text-sm opacity-90">{rawTranscript || "No transcript captured yet."}</pre>
@@ -414,10 +415,9 @@ export function TranscriptScreen({
             <div>
               <div className="flex items-center justify-between">
                 <p className="text-xs font-bold text-field-muted">English processing copy</p>
-                <StatusBadge
+                <StatusDot
                   label={translationReport.isTranslation ? translationReport.label : "Local mock only"}
                   tone={translationReport.isTranslation ? "warn" : "neutral"}
-                  icon={<Languages className="h-3.5 w-3.5" />}
                 />
               </div>
               <pre className="ink-panel mt-2 whitespace-pre-wrap text-sm opacity-90">

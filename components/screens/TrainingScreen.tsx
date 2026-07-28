@@ -1,21 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { FileEdit, ListChecks, ScrollText, UploadCloud, Zap } from "lucide-react";
+import { ListChecks } from "lucide-react";
 import type { LanguagePack, ManualExtractedFields, Tester } from "@/lib/types";
 import { DEMO_SAMPLE_TRANSCRIPT } from "@/lib/demoHelpers";
 import { extractFieldsFromTranscript, FIELD_DISPLAY_LABELS } from "@/lib/fieldExtraction";
-import { CheckboxCard, Disclosure, PrimaryButton, StatusBadge } from "@/components/ui";
+import { CheckboxCard, Disclosure, PrimaryButton } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { HighlightedTranscript } from "@/components/TranscriptHighlight";
 
-/** Sells the app on speed/value to a tester who already knows the physical test — never re-explains the clinical steps themselves. Exactly the 5 sections spec'd: capture / admin / missing-fields / evidence / export. */
+/** Sells the app on speed/value to a tester who already knows the physical test — never re-explains the clinical steps themselves. Plain rows, no icon circles: this is an operational refresher, not a feature-card marketing page. */
 const WHY_USE_THE_APP = [
-  { icon: Zap, title: "Capture while testing", text: "Nothing to remember and re-enter later." },
-  { icon: FileEdit, title: "Reduce later admin", text: "Fields fill in from what's said, not retyped from memory." },
-  { icon: ListChecks, title: "Check missing fields before export", text: "Flagged while you can still ask, not after." },
-  { icon: ScrollText, title: "Review evidence quickly", text: "Jump straight to the transcript line behind a value." },
-  { icon: UploadCloud, title: "Export non-personal data", text: "Export-ready the moment QC is clear." }
+  { title: "Capture while testing", text: "Nothing to remember and re-enter later." },
+  { title: "Reduce later admin", text: "Fields fill in from what's said, not retyped from memory." },
+  { title: "Catch missing fields", text: "Flagged while you can still ask, not after." },
+  { title: "Review evidence quickly", text: "Jump straight to the transcript line behind a value." },
+  { title: "Export cleaner data", text: "Ready for export the moment QC is clear." }
 ];
 
 const HABIT_BRIDGE_STEPS = [
@@ -89,7 +89,7 @@ function PracticePreview() {
         </p>
         <p className="mt-1 text-xs opacity-70">
           This sample never states a final readable line explicitly, so <strong>Final readable line</strong> stays{" "}
-          <StatusBadge label="Needs review" tone="warn" /> until confirmed — QC catches exactly this kind of gap
+          <strong className="text-[var(--warn)]">Check</strong> until confirmed — QC catches exactly this kind of gap
           before export.
         </p>
       </div>
@@ -120,21 +120,16 @@ export function TrainingScreen({
         the clinical steps.
       </p>
 
-      <p className="mb-2 text-xs font-bold opacity-50">Why use the app if you already know the test?</p>
-      <div className="mb-5 space-y-2">
-        {WHY_USE_THE_APP.map(({ icon: Icon, title, text }) => (
-          <div key={title} className="field-card flex items-center gap-3 py-2.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--bg-surface)] text-[var(--gold)]">
-              <Icon className="h-4 w-4" />
-            </span>
-            <p className="text-sm leading-snug">
-              <span className="font-bold">{title}.</span> <span className="opacity-80">{text}</span>
-            </p>
-          </div>
+      <p className="mb-2 text-xs font-bold opacity-50">Why use the app?</p>
+      <div className="field-card mb-5 divide-y divide-field-line">
+        {WHY_USE_THE_APP.map(({ title, text }) => (
+          <p key={title} className="py-2 text-sm leading-snug first:pt-0 last:pb-0">
+            <span className="font-bold">{title}.</span> <span className="opacity-80">{text}</span>
+          </p>
         ))}
       </div>
 
-      <p className="mb-2 text-xs font-bold opacity-50">Fast habit bridge</p>
+      <p className="mb-2 text-xs font-bold opacity-50">Fast habit</p>
       <div className="field-card mb-5">
         <ol className="space-y-2">
           {HABIT_BRIDGE_STEPS.map((step, index) => (
@@ -148,7 +143,7 @@ export function TrainingScreen({
         </ol>
       </div>
 
-      <p className="mb-2 text-xs font-bold opacity-50">What not to rely on</p>
+      <p className="mb-2 text-xs font-bold opacity-50">Remember</p>
       <div className="field-card mb-5 space-y-1.5 text-sm opacity-85">
         <p>Speech-to-text is a draft, not a transcript guarantee.</p>
         <p>The app does not confirm clinical results — it supports capture and review.</p>

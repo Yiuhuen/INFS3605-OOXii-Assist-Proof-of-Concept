@@ -80,7 +80,7 @@ export function MoreScreen({
         <ListRow
           icon={<DatabaseZap className="h-5 w-5" />}
           label="Load synthetic demo data"
-          detail="Adds 12 synthetic anonymous records for Insights/QC/Export demos"
+          detail="Adds 12 synthetic demo records for Insights/QC/Export demos — no personal data"
           onClick={() => setActiveConfirm("loadDemo")}
         />
         <ListRow
@@ -105,7 +105,7 @@ export function MoreScreen({
       {activeConfirm === "loadDemo" && (
         <div className="mt-3 space-y-3 rounded-2xl border border-field-line p-4">
           <InfoCard>
-            This will add synthetic anonymous records for demo purposes. No personal data is included. Your real saved
+            This will add synthetic records for demo purposes. No personal data is included. Your real saved
             records, if any, are kept untouched.
           </InfoCard>
           <div className="flex gap-3">

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { LanguageCode, LanguagePack, PromptStep } from "@/lib/types";
-import { PrimaryButton, PromptCard, SelectField, StatusBadge, TextAreaField } from "@/components/ui";
+import { PrimaryButton, PromptCard, SelectField, StatusDot, TextAreaField } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { isSpeechSupported } from "@/lib/speech";
 
@@ -119,7 +119,7 @@ export function AdminScreen({
 
           <div className="flex items-center gap-3">
             <PrimaryButton onClick={saveDraft}>Save prompt</PrimaryButton>
-            {saved && <StatusBadge label="Saved locally" tone="good" />}
+            {saved && <StatusDot label="Saved locally" tone="good" />}
           </div>
         </div>
       )}

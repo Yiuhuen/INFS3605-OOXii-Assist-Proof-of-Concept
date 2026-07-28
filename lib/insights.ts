@@ -191,7 +191,7 @@ function buildInsights(records: TestRecord[], stats: {
     insights.push({
       id: "pending-sync",
       title: `${stats.pendingSyncCount} record${stats.pendingSyncCount === 1 ? "" : "s"} pending sync`,
-      evidence: `${stats.pendingSyncCount} of ${totalRecords} records are saved locally but not yet synced.`,
+      evidence: `${stats.pendingSyncCount} of ${totalRecords} records ${stats.pendingSyncCount === 1 ? "is" : "are"} saved locally but not yet synced.`,
       action: "Sync when internet is available before central reporting.",
       priority: rate(stats.pendingSyncCount, totalRecords) > 0.5 ? "High" : "Medium",
       targetPage: "Export"
@@ -244,7 +244,7 @@ function buildInsights(records: TestRecord[], stats: {
   if (stats.unclearSegmentRecordCount > 0) {
     insights.push({
       id: "unclear-segments",
-      title: `${stats.unclearSegmentRecordCount} record${stats.unclearSegmentRecordCount === 1 ? "" : "s"} have unclear audio sections flagged`,
+      title: `${stats.unclearSegmentRecordCount} record${stats.unclearSegmentRecordCount === 1 ? " has" : "s have"} unclear audio sections flagged`,
       evidence: `${stats.unclearSegmentRecordCount} of ${totalRecords} records have a tester-flagged unclear section.`,
       action: "Review flagged sections against the audio during QC.",
       priority: rate(stats.unclearSegmentRecordCount, totalRecords) > 0.3 ? "High" : "Medium",
@@ -267,8 +267,8 @@ function buildInsights(records: TestRecord[], stats: {
   if (stats.editedCount > 0) {
     insights.push({
       id: "edited-fields",
-      title: `${stats.editedCount} record${stats.editedCount === 1 ? "" : "s"} have edited fields awaiting QC verification`,
-      evidence: `${stats.editedCount} of ${totalRecords} records were hand-edited and are marked "requires QC verification".`,
+      title: `${stats.editedCount} record${stats.editedCount === 1 ? " has" : "s have"} edited fields awaiting QC verification`,
+      evidence: `${stats.editedCount} of ${totalRecords} records ${stats.editedCount === 1 ? "was" : "were"} hand-edited and marked "requires QC verification".`,
       action: "Confirm each edited field is correct in QC Review.",
       priority: rate(stats.editedCount, totalRecords) > 0.4 ? "High" : "Medium",
       targetPage: "QC"

@@ -1,9 +1,9 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, ChevronLeft, Clock, Plus } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronLeft, Plus } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
 import { processingStatusLabel, processingStatusTone, qcStatusLabel, syncStatusLabel } from "@/lib/qc";
-import { PrimaryButton, SecondaryButton, StatusBadge } from "@/components/ui";
+import { PrimaryButton, SecondaryButton, StatusDot } from "@/components/ui";
 import { OneScreenShell, BottomActionBar } from "@/components/layout/OneScreenShell";
 
 export function SavedScreen({
@@ -57,26 +57,19 @@ export function SavedScreen({
           <p className="mt-1 line-clamp-1 text-sm opacity-70">Client {record.client_id} — audio and answers stored on this phone.</p>
         </div>
 
+        {/* One status dot per row, same vocabulary as QC's record summary — never a stack of pills. */}
         <div className="field-card w-full space-y-2 text-left text-sm">
           <div className="flex items-center justify-between">
             <span className="opacity-70">Sync status</span>
-            <StatusBadge
-              label={syncStatusLabel(record.sync_status)}
-              tone={record.sync_status === "Synced" ? "good" : "warn"}
-              icon={<Clock className="h-3.5 w-3.5" />}
-            />
+            <StatusDot label={syncStatusLabel(record.sync_status)} tone={record.sync_status === "Synced" ? "good" : "warn"} />
           </div>
           <div className="flex items-center justify-between">
             <span className="opacity-70">QC status</span>
-            <StatusBadge
-              label={qcStatusLabel(record.qc_status)}
-              tone={record.qc_status === "Approved" ? "good" : "warn"}
-              icon={<AlertTriangle className="h-3.5 w-3.5" />}
-            />
+            <StatusDot label={qcStatusLabel(record.qc_status)} tone={record.qc_status === "Approved" ? "good" : "warn"} />
           </div>
           <div className="flex items-center justify-between">
             <span className="opacity-70">Processing</span>
-            <StatusBadge label={processingStatusLabel(record.processing_status)} tone={processingStatusTone(record.processing_status)} />
+            <StatusDot label={processingStatusLabel(record.processing_status)} tone={processingStatusTone(record.processing_status)} />
           </div>
         </div>
 

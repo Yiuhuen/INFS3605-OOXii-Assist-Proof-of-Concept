@@ -472,19 +472,22 @@ function CapturedSoFarPanel({ liveFields }: { liveFields: LiveCapturedFieldMap |
           {capturedCount} of {LIVE_CAPTURED_FIELD_KEYS.length}
         </span>
       </div>
-      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+      {/* Single column below 360px — at 320px two columns force "Current
+          glasses · Missing" into an ellipsis, and a truncated status is worse
+          in the field than a slightly taller list (the column scrolls). */}
+      <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-0.5 min-[360px]:grid-cols-2">
         {LIVE_CAPTURED_FIELD_KEYS.map((key, index) => {
           const field = liveFields?.[key];
           const status = field?.status ?? "Missing";
           const label = LIVE_CAPTURED_FIELD_LABELS[key];
           const tone: StatusDotTone = status === "Captured" ? "good" : status === "Check" ? "warn" : "muted";
           // The odd 7th row ("Glasses selected", also the longest label) takes
-          // the full width so it never truncates at 320/375px.
+          // the full width so it never truncates at 360px+ two-column widths.
           const isLastOdd = index === LIVE_CAPTURED_FIELD_KEYS.length - 1 && LIVE_CAPTURED_FIELD_KEYS.length % 2 === 1;
           return (
             <span
               key={key}
-              className={`status-dot min-w-0 text-[11px] ${isLastOdd ? "col-span-2" : ""} ${tone === "good" ? "is-good" : tone === "warn" ? "is-warn" : "is-muted"}`}
+              className={`status-dot min-w-0 text-[11px] ${isLastOdd ? "min-[360px]:col-span-2" : ""} ${tone === "good" ? "is-good" : tone === "warn" ? "is-warn" : "is-muted"}`}
             >
               <span className="truncate">
                 {label}

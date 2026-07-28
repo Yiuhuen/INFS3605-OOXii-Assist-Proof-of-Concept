@@ -81,7 +81,7 @@ export function ClientScreen({
         </p>
 
         <div className="shrink-0">
-          <Disclosure label="Optional details">
+          <Disclosure label="More details">
             <div className="grid grid-cols-2 content-start gap-3">
               <SelectField label="Age band" value={client.age_band} onChange={(event) => setClient({ ...client, age_band: event.target.value })}>
                 {["Under 18", "18–34", "35–44", "45–54", "55–64", "65+"].map((value) => (

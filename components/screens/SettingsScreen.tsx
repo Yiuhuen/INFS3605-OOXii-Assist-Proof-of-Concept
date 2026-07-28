@@ -3,7 +3,7 @@
 import { LogOut, ShieldCheck } from "lucide-react";
 import { brightnessLabels, contrastLabels, speechSpeedLabels, type Brightness, type ContrastTheme, type DisplaySettings } from "@/lib/settings";
 import type { ConnectionMode, LanguagePack, Tester } from "@/lib/types";
-import { DangerButton, FormField, InfoCard, PrimaryButton, PromptCard, SelectField, StatusBadge } from "@/components/ui";
+import { DangerButton, FormField, InfoCard, PrimaryButton, PromptCard, SelectField } from "@/components/ui";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { isSpeechSupported, type SpeechSpeed } from "@/lib/speech";
 
@@ -115,7 +115,7 @@ export function SettingsScreen({
       <div className="mt-8 space-y-4">
         <div className="flex items-center justify-between">
           <p className="font-bold">Tester profile</p>
-          <StatusBadge label={tester.id} tone="neutral" />
+          <span className="font-mono text-xs opacity-60">{tester.id}</span>
         </div>
         <InfoCard icon={<ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />}>
           Tester profile saved on this device — offline field use works without signing in again.
