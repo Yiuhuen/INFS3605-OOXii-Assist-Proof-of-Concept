@@ -1,17 +1,36 @@
 /**
- * Lightweight, dependency-free regression test for the synthetic demo
- * dataset (lib/demoRecords.ts) and everything that reads it — Insights
- * (lib/insights.ts), QC (lib/qc.ts), and both CSV exports (lib/csv.ts).
- * No test framework — plain assertions, plain console output, exits
- * non-zero on any failure so it can gate CI/builds. Mirrors the style of
+ * Lightweight, dependency-free regression test for the 6-record sample
+ * dataset (lib/demoRecords.ts) and both longlist exports (lib/csv.ts),
+ * covering the export/demo spec's test matrix:
+ *   1. OOXii Data Longlist — one row per record
+ *   2. Full Audit Longlist — one row per field
+ *   3. Right/left lens split
+ *   4. Astigmatism/toric/axis fields
+ *   5. Optional short-sighted test not performed → "Not tested", no QC
+ *   6. Optional short-sighted test performed but incomplete → QC with reason
+ *   7. Manual reviewed correction → audit trail preserved
+ *   8. Privacy guard — no personal-data columns
+ * No test framework — plain assertions, plain console output, exits non-zero
+ * on any failure so it can gate CI/builds. Mirrors the style of
  * scripts/test-field-extraction.ts.
  *
- * Run: npm run test:demo-data
+ * Run: npm run test:demo-data (alias: npm run test:exports)
  */
 import { seedDemoRecords, DEMO_DATASET_VERSION } from "../lib/demoRecords";
 import { computeInsights } from "../lib/insights";
-import { filterRecords, qcReviewIssues, recordNeedsQc } from "../lib/qc";
-import { AUDIT_CSV_COLUMNS, LONGLIST_CSV_COLUMNS, recordsToAuditCsv, recordsToLonglistCsv } from "../lib/csv";
+import { qcReasonSummary, qcReviewIssues, recordNeedsQc } from "../lib/qc";
+import {
+  AUDIT_CSV_COLUMNS,
+  AUDIT_FIELD_KEYS,
+  FORBIDDEN_EXPORT_COLUMNS,
+  LONGLIST_CSV_COLUMNS,
+  assertNoPersonalFields,
+  buildFullAuditLonglist,
+  buildOoxiiDataLonglist,
+  recordsToAuditCsv,
+  recordsToLonglistCsv
+} from "../lib/csv";
+import type { LonglistTable } from "../lib/csv";
 
 interface Case {
   name: string;
@@ -35,212 +54,173 @@ function findRecord(records: ReturnType<typeof seedDemoRecords>, clientId: strin
   return record;
 }
 
-// Exact column-name denylist for personal/identifying data. Deliberately NOT
-// a generic "contains the word 'name'" substring check — this app has
-// legitimate metadata columns like "field_name" (which field a row
-// describes) and "language_pack"/"tester_label" that must never false-positive
-// just because a forbidden word appears as part of an unrelated compound word.
-const FORBIDDEN_COLUMNS = new Set([
-  "name",
-  "full_name",
-  "first_name",
-  "last_name",
-  "client_name",
-  "tester_name",
-  "dob",
-  "date_of_birth",
-  "phone",
-  "phone_number",
-  "contact",
-  "address",
-  "exact_address",
-  "street_address",
-  "home_address",
-  "gps",
-  "gps_coordinates",
-  "latitude",
-  "longitude",
-  "lat",
-  "lng",
-  "location"
-]);
-
-function containsForbiddenColumn(column: string): string | null {
-  return FORBIDDEN_COLUMNS.has(column.toLowerCase()) ? column : null;
+/** Cell lookup helpers over the structured longlist tables (no CSV string parsing). */
+function col(table: LonglistTable, name: string): number {
+  const index = table.columns.indexOf(name);
+  if (index === -1) throw new Error(`fixture error: column ${name} not found`);
+  return index;
 }
 
-// A. Exactly 13 records, all tagged as demo data, with unique IDs. (12
-// original + C-113N, added to exercise Phase 9 Case 3: short-sighted test
-// performed but incomplete.)
+function dataRow(table: LonglistTable, clientId: string) {
+  const row = table.rows.find((r) => r[col(table, "client_id")] === clientId);
+  if (!row) throw new Error(`fixture error: no data row for ${clientId}`);
+  return (name: string) => row[col(table, name)];
+}
+
+function auditRow(table: LonglistTable, clientId: string, fieldName: string) {
+  const row = table.rows.find((r) => r[col(table, "client_id")] === clientId && r[col(table, "field_name")] === fieldName);
+  if (!row) throw new Error(`fixture error: no audit row for ${clientId}/${fieldName}`);
+  return (name: string) => row[col(table, name)];
+}
+
+// A. Exactly 6 sample records — one per presentation case — all tagged, unique, anonymous.
 cases.push({
-  name: "A. seedDemoRecords returns exactly 13 uniquely-identified, tagged records",
+  name: "A. seedDemoRecords returns exactly 6 uniquely-identified, tagged sample records",
   run: () => {
     const records = seedDemoRecords();
     const clientIds = new Set(records.map((r) => r.client_id));
     const recordIds = new Set(records.map((r) => r.id));
     return (
-      expectEqual("record count", records.length, 13) ??
+      expectEqual("record count", records.length, 6) ??
       (records.every((r) => r.demo_record) ? null : "expected every record to have demo_record: true") ??
       (records.every((r) => r.demo_dataset_version === DEMO_DATASET_VERSION) ? null : "expected every record to carry DEMO_DATASET_VERSION") ??
-      expectEqual("unique anonymous_client_id count", clientIds.size, 13) ??
-      expectEqual("unique record_id count", recordIds.size, 13) ??
-      (records.every((r) => /^C-\d{3}[A-Z]$/.test(r.client_id)) ? null : "expected every client_id to match the anonymous C-###X pattern")
+      expectEqual("unique client_id count", clientIds.size, 6) ??
+      expectEqual("unique record_id count", recordIds.size, 6) ??
+      (records.every((r) => /^C-\d{3}[A-Z]$/.test(r.client_id)) ? null : "expected every client_id to match the generated C-###X pattern")
     );
   }
 });
 
-// B. No forbidden personal-data columns in either CSV export's header.
+// B. Export-screen rollup: 6 records · 3 ready for export · 3 need review · 1 pending sync.
 cases.push({
-  name: "B. No forbidden personal-data columns in CSV headers",
-  run: () => {
-    for (const column of [...LONGLIST_CSV_COLUMNS, ...AUDIT_CSV_COLUMNS]) {
-      const hit = containsForbiddenColumn(column);
-      if (hit) return `column "${column}" contains forbidden term "${hit}"`;
-    }
-    return null;
-  }
-});
-
-// C. current_glasses is never confused with glasses_selected — independent evidence, independent values.
-cases.push({
-  name: "C. current_glasses and glasses_selected never share evidence (no field-semantics bleed)",
-  run: () => {
-    for (const record of seedDemoRecords()) {
-      const fieldConfidence = record.extracted_json.field_confidence;
-      const currentGlasses = fieldConfidence?.current_glasses;
-      const glassesSelected = fieldConfidence?.glasses_selected;
-      if (currentGlasses?.evidence && glassesSelected?.evidence && currentGlasses.evidence === glassesSelected.evidence) {
-        return `${record.client_id}: current_glasses and glasses_selected share the same evidence quote — likely bleed-through`;
-      }
-    }
-    // Record 1 explicitly exercises both being present with distinct, independent values (Yes / a freshly-dispensed pair).
-    const r1 = findRecord(seedDemoRecords(), "C-101A");
-    return (
-      expectEqual("R-001 current_glasses", r1.extracted_json.current_glasses, "Yes") ??
-      expectEqual("R-001 glasses_selected", r1.extracted_json.glasses_selected, "+1.00 reading glasses")
-    );
-  }
-});
-
-// D. Missing cataract history triggers QC (C-103C, C-111L).
-cases.push({
-  name: "D. Missing cataract history triggers QC",
+  name: "B. Status rollup — 3 ready, 3 need review, 1 pending sync",
   run: () => {
     const records = seedDemoRecords();
-    for (const clientId of ["C-103C", "C-111L"]) {
-      const record = findRecord(records, clientId);
-      if (record.extracted_json.cataract_history_confirmed.trim()) return `${clientId}: expected cataract_history_confirmed to be empty/not-captured`;
-      if (!recordNeedsQc(record)) return `${clientId}: expected recordNeedsQc to be true`;
-    }
-    return null;
+    const needsQc = records.filter(recordNeedsQc).length;
+    const pending = records.filter((r) => r.sync_status === "Pending sync").length;
+    return (
+      expectEqual("needs review count", needsQc, 3) ??
+      expectEqual("ready for export count", records.length - needsQc, 3) ??
+      expectEqual("pending sync count", pending, 1)
+    );
   }
 });
 
-// E. Missing glasses selected/dispensed triggers QC (C-104D, C-107G, C-111L).
+// Test 1 — OOXii Data Longlist: one row per record.
 cases.push({
-  name: "E. Missing glasses selected/dispensed triggers QC",
+  name: "1. OOXii Data Longlist has one row per record",
   run: () => {
     const records = seedDemoRecords();
-    for (const clientId of ["C-104D", "C-107G", "C-111L"]) {
-      const record = findRecord(records, clientId);
-      if (record.extracted_json.glasses_selected.trim()) return `${clientId}: expected glasses_selected to be empty/not-captured`;
-      if (!recordNeedsQc(record)) return `${clientId}: expected recordNeedsQc to be true`;
-    }
-    return null;
-  }
-});
-
-// F. Manual edit on glasses selected/dispensed triggers QC (C-108H).
-cases.push({
-  name: "F. Manual edit on high-risk field (glasses selected) triggers QC",
-  run: () => {
-    const record = findRecord(seedDemoRecords(), "C-108H");
+    const table = buildOoxiiDataLonglist(records);
+    const csvLines = recordsToLonglistCsv(records).trim().split("\n");
     return (
-      expectTrue("edited_by_user", record.edited_by_user) ??
-      expectEqual("effective glasses_selected", record.edited_extracted_json?.glasses_selected, "+1.00 reading glasses") ??
-      expectEqual("effective glasses_selected source", record.edited_extracted_json?.field_confidence?.glasses_selected?.source, "manual") ??
-      (recordNeedsQc(record) ? null : "expected recordNeedsQc to be true")
+      expectEqual("table row count", table.rows.length, 6) ??
+      expectEqual("csv line count (header + 6 records)", csvLines.length, 7)
     );
   }
 });
 
-// G. Manual recording override triggers QC (C-105E).
+// Test 2 — Full Audit Longlist: one row per (record, field) pair.
 cases.push({
-  name: "G. Manual recording override triggers QC",
-  run: () => {
-    const record = findRecord(seedDemoRecords(), "C-105E");
-    return (
-      expectEqual("recording_status", record.recording_status, "manual_override") ??
-      (recordNeedsQc(record) ? null : "expected recordNeedsQc to be true")
-    );
-  }
-});
-
-// H. Prompt coverage incomplete triggers QC (C-107G).
-cases.push({
-  name: "H. Prompt coverage incomplete triggers QC",
-  run: () => {
-    const record = findRecord(seedDemoRecords(), "C-107G");
-    return (
-      expectTrue("has_unvisited_prompts", record.has_unvisited_prompts) ??
-      (recordNeedsQc(record) ? null : "expected recordNeedsQc to be true")
-    );
-  }
-});
-
-// I. A genuinely clean, pending-sync record (C-109J) does NOT need QC — pending sync is a timing state, not a data-quality problem.
-cases.push({
-  name: "I. Clean + pending-sync record does not need QC (recordNeedsQc pending-sync fix)",
-  run: () => {
-    const record = findRecord(seedDemoRecords(), "C-109J");
-    return (
-      expectEqual("sync_status", record.sync_status, "Pending sync") ??
-      expectEqual("qc_status", record.qc_status, "Approved") ??
-      (recordNeedsQc(record) ? "expected recordNeedsQc to be false for an Approved, otherwise-clean, merely-unsynced record" : null)
-    );
-  }
-});
-
-// J. Aggregate Insights counts. NOTE: the brief's own per-record qc_required
-// values (Phase 7) sum to 7 true / 5 false (R3,4,5,6,7,8,11), not the
-// stated rollup "Needs QC: 6 / export-ready: 6" — implemented per-record
-// exactly as specified (the more detailed instruction) and asserted here
-// against the REAL computed number, with the discrepancy disclosed in the
-// final report rather than silently forced to match. C-113N (record 13,
-// Phase 9 Case 3) adds an 8th needs-QC record: qc_status Unreviewed, with a
-// short-sighted result missing after the module was performed.
-cases.push({
-  name: "J. Aggregate insights match the per-record spec's real computed numbers",
+  name: "2. Full Audit Longlist has one row per captured/reviewed field",
   run: () => {
     const records = seedDemoRecords();
-    const summary = computeInsights(records);
-    const cataractGap = summary.fieldGaps.find((gap) => gap.field === "cataract_history_confirmed");
-
+    const table = buildFullAuditLonglist(records);
+    const csvLines = recordsToAuditCsv(records).trim().split("\n");
+    const fieldsPerRecord = AUDIT_FIELD_KEYS.length; // 22 tracked fields
     return (
-      expectEqual("total records", summary.totalRecords, 13) ??
-      expectEqual("needs QC count", summary.needsQcCount, 8) ??
-      expectEqual("export ready count", summary.totalRecords - summary.needsQcCount, 5) ??
-      expectEqual("manual override count", summary.manualOverrideCount, 1) ??
-      expectEqual("cataract history missing count", cataractGap?.missingCount ?? 0, 2) ??
-      expectEqual("prompt coverage incomplete count", summary.promptCoverageIncompleteCount, 1) ??
-      expectEqual("pending sync count", summary.pendingSyncCount, 1) ??
-      expectEqual("re-record improved count", summary.rerecordImprovedCount, 1)
+      expectEqual("fields per record", fieldsPerRecord, 22) ??
+      expectEqual("audit row count (6 records x 22 fields)", table.rows.length, 6 * fieldsPerRecord) ??
+      expectEqual("csv line count", csvLines.length, 1 + 6 * fieldsPerRecord)
     );
   }
 });
 
-// P. Phase 9 Case 3 (C-113N): short-sighted test performed, left result
-// missing — needs QC specifically for that reason, and the reason text is
-// the exact spec wording, never the generic "requires review" fallback.
+// Test 3 — right/left lens data is split, never a single ambiguous column.
 cases.push({
-  name: "P. Short-sighted module performed-but-incomplete (C-113N) needs QC with the specific reason",
+  name: "3. Right/left lens columns are split",
   run: () => {
-    const record = findRecord(seedDemoRecords(), "C-113N");
+    const columns = LONGLIST_CSV_COLUMNS as readonly string[];
+    const table = buildOoxiiDataLonglist(seedDemoRecords());
+    const r1 = dataRow(table, "C-811W");
+    return (
+      expectTrue("right_lens_selected column exists", columns.includes("right_lens_selected")) ??
+      expectTrue("left_lens_selected column exists", columns.includes("left_lens_selected")) ??
+      expectTrue("no bare glasses_selected column", !columns.includes("glasses_selected")) ??
+      expectEqual("C-811W right lens", r1("right_lens_selected"), "+1.00") ??
+      expectEqual("C-811W left lens", r1("left_lens_selected"), "+1.50")
+    );
+  }
+});
+
+// Test 4 — astigmatism/toric/axis fields exist and carry Case 2's values.
+cases.push({
+  name: "4. Astigmatism, toric power and axis fields per eye",
+  run: () => {
+    const columns = LONGLIST_CSV_COLUMNS as readonly string[];
+    for (const column of ["right_astigmatism", "right_toric_power", "right_axis", "left_astigmatism", "left_toric_power", "left_axis"]) {
+      if (!columns.includes(column)) return `missing column ${column}`;
+    }
+    const table = buildOoxiiDataLonglist(seedDemoRecords());
+    const r2 = dataRow(table, "C-274K");
+    return (
+      expectEqual("C-274K right astigmatism", r2("right_astigmatism"), "Yes") ??
+      expectEqual("C-274K right toric power", r2("right_toric_power"), "T2") ??
+      expectEqual("C-274K right axis", r2("right_axis"), "90") ??
+      expectEqual("C-274K left astigmatism", r2("left_astigmatism"), "Yes") ??
+      expectEqual("C-274K left toric power", r2("left_toric_power"), "T1.5") ??
+      expectEqual("C-274K left axis", r2("left_axis"), "85") ??
+      (recordNeedsQc(findRecord(seedDemoRecords(), "C-274K")) ? "expected reviewed astigmatism record C-274K to stay QC-clean" : null)
+    );
+  }
+});
+
+// Test 5 — Case 4: short-sighted test explicitly not performed → "Not tested", never blank, no QC.
+cases.push({
+  name: "5. Short-sighted not performed exports 'Not tested', not blank, with no QC pressure",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-489T");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-489T");
+    const audit = buildFullAuditLonglist(records);
+    const rightRow = auditRow(audit, "C-489T", "short_sighted_right_result");
+    return (
+      expectEqual("short_sighted_test_performed", data("short_sighted_test_performed"), "No") ??
+      expectEqual("short_sighted_right_result", data("short_sighted_right_result"), "Not tested") ??
+      expectEqual("short_sighted_left_result", data("short_sighted_left_result"), "Not tested") ??
+      expectEqual("short_sighted_notes_status", data("short_sighted_notes_status"), "Not tested") ??
+      expectEqual("audit field_status", rightRow("field_status"), "not_tested") ??
+      expectEqual("audit field_source", rightRow("field_source"), "not_applicable") ??
+      expectEqual("audit requires_review", rightRow("requires_review"), false) ??
+      expectEqual("audit qc_reason", rightRow("qc_reason"), "") ??
+      (recordNeedsQc(record) ? "expected C-489T (pending sync, approved) to be export ready" : null) ??
+      expectEqual("export_ready", data("export_ready"), true) ??
+      expectEqual("pending_sync", data("pending_sync"), true)
+    );
+  }
+});
+
+// Test 6 — Case 5: short-sighted performed but incomplete → Missing + QC with the specific reason.
+cases.push({
+  name: "6. Short-sighted performed-but-incomplete needs QC with a clear reason",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-560M");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-560M");
+    const leftRow = auditRow(buildFullAuditLonglist(records), "C-560M", "short_sighted_left_result");
     const reasons = qcReviewIssues(record).map((issue) => issue.detail);
     return (
-      expectEqual("short_sighted_test_performed", record.extracted_json.short_sighted_test_performed, "Yes") ??
-      expectEqual("short_sighted_left_result", record.extracted_json.short_sighted_left_result, "") ??
+      expectEqual("short_sighted_test_performed", data("short_sighted_test_performed"), "Yes") ??
+      expectEqual("short_sighted_left_result", data("short_sighted_left_result"), "Missing") ??
+      expectEqual("short_sighted_both_eyes_result", data("short_sighted_both_eyes_result"), "Line 5") ??
+      expectEqual("audit field_status", leftRow("field_status"), "missing") ??
+      expectEqual("audit requires_review", leftRow("requires_review"), true) ??
+      expectEqual("audit qc_reason", leftRow("qc_reason"), "Short-sighted test performed but left result missing.") ??
       (recordNeedsQc(record) ? null : "expected recordNeedsQc to be true") ??
+      expectEqual("qc_required", data("qc_required"), true) ??
+      (String(data("qc_reason_summary")).toLowerCase().includes("left result missing")
+        ? null
+        : `expected qc_reason_summary to explain the missing left result, got "${data("qc_reason_summary")}"`) ??
       (reasons.some((detail) => detail === "Short-sighted test performed but left result missing.")
         ? null
         : `expected the specific short-sighted QC reason, got: ${JSON.stringify(reasons)}`)
@@ -248,39 +228,109 @@ cases.push({
   }
 });
 
-// Q. Phase 9 Case 1/4 (C-101A) and Case 2 (C-110K): the optional astigmatism/
-// short-sighted modules never add QC pressure when complete or not performed.
+// Test 7 — Case 6: manual reviewed correction preserves the audit trail.
 cases.push({
-  name: "Q. Complete astigmatism data and a not-performed short-sighted module never trigger QC on their own",
+  name: "7. Manual reviewed correction — source, original value and evidence preserved",
   run: () => {
     const records = seedDemoRecords();
-    const caseOne = findRecord(records, "C-101A");
-    const caseTwo = findRecord(records, "C-110K");
+    const record = findRecord(records, "C-638R");
+    const row = auditRow(buildFullAuditLonglist(records), "C-638R", "final_readable_line");
     return (
-      expectEqual("C-101A short_sighted_test_performed", caseOne.extracted_json.short_sighted_test_performed, "No") ??
-      expectEqual("C-101A short_sighted_right_result", caseOne.extracted_json.short_sighted_right_result, "Not tested") ??
-      (recordNeedsQc(caseOne) ? "expected C-101A to stay QC-clean" : null) ??
-      expectEqual("C-110K right_toric_power", caseTwo.extracted_json.right_toric_power, "T2") ??
-      expectEqual("C-110K left_toric_axis", caseTwo.extracted_json.left_toric_axis, "35") ??
-      (recordNeedsQc(caseTwo) ? "expected C-110K to stay QC-clean" : null)
+      expectTrue("edited_by_user", record.edited_by_user) ??
+      expectEqual("original extraction preserved in extracted_json", record.extracted_json.final_readable_line, "Line 2") ??
+      expectEqual("effective value", record.edited_extracted_json?.final_readable_line, "Line 3") ??
+      expectEqual("audit manually_edited", row("manually_edited"), true) ??
+      expectEqual("audit field_source", row("field_source"), "reviewed_manual_entry") ??
+      expectEqual("audit original_extracted_value", row("original_extracted_value"), "Line 2") ??
+      expectEqual("audit reviewed_value", row("reviewed_value"), "Line 3") ??
+      expectEqual("audit reviewer_action", row("reviewer_action"), "corrected_value") ??
+      (String(row("evidence_quote")).includes("hard to hear") ? null : `expected the original evidence quote to survive the edit, got "${row("evidence_quote")}"`) ??
+      (recordNeedsQc(record) ? null : "expected the corrected-but-not-yet-approved record to still count as needing review")
     );
   }
 });
 
-// K. The dedicated glasses-selected insight card counts "missing or manually entered" (4 records: R4, R7, R8, R11) — matches the brief's target exactly.
+// Test 8 — privacy guard: no personal-data columns in either export, and the runtime guard actually throws.
 cases.push({
-  name: "K. Glasses-selected-dispensed insight covers missing + manually-entered records",
+  name: "8. Privacy guard — no personal columns, runtime guard throws on violations",
   run: () => {
-    const summary = computeInsights(seedDemoRecords());
-    const glassesCard = summary.insights.find((i) => i.id === "glasses-selected-gap");
-    if (!glassesCard) return "expected a glasses-selected-gap insight card";
-    return glassesCard.title.includes("4 records") ? null : `expected glasses-selected-gap card to cover 4 records, got title "${glassesCard.title}"`;
+    for (const column of [...LONGLIST_CSV_COLUMNS, ...AUDIT_CSV_COLUMNS]) {
+      if (FORBIDDEN_EXPORT_COLUMNS.has(column.toLowerCase())) return `column "${column}" is a forbidden personal-data field`;
+    }
+    try {
+      assertNoPersonalFields(["record_id", "client_name"]);
+      return "expected assertNoPersonalFields to throw for client_name";
+    } catch {
+      // expected
+    }
+    return null;
   }
 });
 
-// L. Every record whose QC checklist has issues is actually flagged as needing QC (internal consistency between qc.ts's two entry points).
+// C. Case 1 — clean record: everything captured, no QC, export ready, "Not recorded" for optional values that never came up.
 cases.push({
-  name: "L. qcReviewIssues and recordNeedsQc never disagree",
+  name: "C. Clean standard capture (C-811W) is export ready with deliberate optional values",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-811W");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-811W");
+    return (
+      (recordNeedsQc(record) ? "expected C-811W to stay QC-clean" : null) ??
+      expectEqual("export_ready", data("export_ready"), true) ??
+      expectEqual("qc_reason_summary is empty", data("qc_reason_summary"), "") ??
+      expectEqual("right_eye_line", data("right_eye_line"), "Line 5") ??
+      expectEqual("both_eyes_line", data("both_eyes_line"), "Line 5") ??
+      expectEqual("right_astigmatism", data("right_astigmatism"), "No") ??
+      expectEqual("right_toric_power reads Not recorded (never came up)", data("right_toric_power"), "Not recorded") ??
+      expectEqual("glasses_dispensed_status", data("glasses_dispensed_status"), "Dispensed — +1.00 reading glasses") ??
+      expectEqual("frame_colour", data("frame_colour"), "Black") ??
+      expectEqual("capture_summary", data("capture_summary"), "7/7 core fields captured") ??
+      expectEqual("country", data("country"), "Papua New Guinea") ??
+      expectEqual("checklist_results_card_completed", data("checklist_results_card_completed"), "Yes")
+    );
+  }
+});
+
+// D. Case 3 — missing final line: "Missing" (never blank/"Not tested"), QC required, export blocked.
+cases.push({
+  name: "D. Missing final readable line (C-352P) exports 'Missing' and blocks export",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-352P");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-352P");
+    const audit = buildFullAuditLonglist(records);
+    const finalRow = auditRow(audit, "C-352P", "final_readable_line");
+    const rightRow = auditRow(audit, "C-352P", "right_eye_distance_result");
+    return (
+      (recordNeedsQc(record) ? null : "expected recordNeedsQc to be true") ??
+      expectEqual("final_readable_line", data("final_readable_line"), "Missing") ??
+      expectEqual("export_ready", data("export_ready"), false) ??
+      (String(data("capture_summary")).includes("missing: final line") ? null : `expected capture_summary to name the gap, got "${data("capture_summary")}"`) ??
+      expectEqual("audit final field_status", finalRow("field_status"), "missing") ??
+      expectEqual("audit final field_source", finalRow("field_source"), "not_captured") ??
+      expectEqual("audit final evidence_quote is empty (never fabricated)", finalRow("evidence_quote"), "") ??
+      (String(rightRow("evidence_quote")).includes("right eye can read line four") ? null : "expected right-eye evidence quote to be present") ??
+      expectTrue("right-eye evidence has a transcript line number", Number(rightRow("transcript_line_number")) > 0)
+    );
+  }
+});
+
+// E. Manual note without transcript evidence reads manual_fallback + "No transcript evidence" (never fabricated).
+cases.push({
+  name: "E. Manual value without evidence exports manual_fallback + 'No transcript evidence'",
+  run: () => {
+    const row = auditRow(buildFullAuditLonglist(seedDemoRecords()), "C-560M", "additional_notes");
+    return (
+      expectEqual("field_source", row("field_source"), "manual_fallback") ??
+      expectEqual("evidence_quote", row("evidence_quote"), "No transcript evidence") ??
+      expectEqual("transcript_line_number is empty", row("transcript_line_number"), "")
+    );
+  }
+});
+
+// F. qcReviewIssues and recordNeedsQc never disagree (internal consistency between qc.ts's two entry points).
+cases.push({
+  name: "F. qcReviewIssues and recordNeedsQc never disagree",
   run: () => {
     for (const record of seedDemoRecords()) {
       const issues = qcReviewIssues(record);
@@ -292,131 +342,61 @@ cases.push({
   }
 });
 
-// M. QC screen filters actually populate: Needs QC (8, +C-113N), Edited (1), Missing (4 records with a REQUIRED_EXTRACTED_FIELDS gap: R3, R4, R7, R11 — C-113N has no REQUIRED_EXTRACTED_FIELDS gap, only an optional-module one, so it does not add to this count).
+// G. export_ready is always the exact inverse of qc_required, for every record.
 cases.push({
-  name: "M. QC filter tabs populate as expected",
+  name: "G. export_ready is the inverse of qc_required in every data row",
   run: () => {
-    const records = seedDemoRecords();
-    return (
-      expectEqual("needs_qc filter count", filterRecords(records, "needs_qc").length, 8) ??
-      expectEqual("edited filter count", filterRecords(records, "edited").length, 1) ??
-      expectEqual("missing_fields filter count", filterRecords(records, "missing_fields").length, 4)
-    );
+    const table = buildOoxiiDataLonglist(seedDemoRecords());
+    for (const row of table.rows) {
+      const qcRequired = row[col(table, "qc_required")];
+      const exportReady = row[col(table, "export_ready")];
+      if (qcRequired === exportReady) return `row ${row[0]}: qc_required and export_ready agree (${qcRequired})`;
+    }
+    return null;
   }
 });
 
-// N. Both CSV exports carry the exact columns the brief specifies, and produce the right row shape.
+// H. Every QC-required data row carries a non-empty, human-readable reason summary.
 cases.push({
-  name: "N. CSV exports have the exact brief-specified columns and shape",
+  name: "H. qc_required rows always carry a qc_reason_summary",
   run: () => {
-    const records = seedDemoRecords();
-    const longlist = recordsToLonglistCsv(records);
-    const audit = recordsToAuditCsv(records);
-    const longlistLines = longlist.trim().split("\n");
-    const auditLines = audit.trim().split("\n");
-
-    const expectedLonglistColumns = [
-      "record_id",
-      "anonymous_client_id",
-      "created_at",
-      "outreach_session",
-      "tester_label",
-      "language_pack",
-      "deployment_site",
-      "current_glasses",
-      "cataract_history_confirmed",
-      "right_eye_distance_result",
-      "left_eye_distance_result",
-      "final_readable_line",
-      "comfort_response",
-      "glasses_selected_dispensed",
-      "right_lens_selected",
-      "left_lens_selected",
-      "right_astigmatism_present",
-      "right_toric_power",
-      "right_toric_axis",
-      "left_astigmatism_present",
-      "left_toric_power",
-      "left_toric_axis",
-      "short_sighted_test_performed",
-      "short_sighted_right_result",
-      "short_sighted_left_result",
-      "short_sighted_both_eyes_result",
-      "short_sighted_notes",
-      "additional_notes_non_personal",
-      "recording_mode",
-      "recording_success",
-      "recording_attempt_number",
-      "rerecord_used",
-      "capture_confidence",
-      "qc_required",
-      "qc_status",
-      "qc_reason_summary",
-      "export_ready",
-      "saved_locally",
-      "sync_status",
-      "demo_record",
-      "demo_dataset_version"
-    ];
-    const expectedAuditColumns = [
-      "record_id",
-      "anonymous_client_id",
-      "demo_record",
-      "demo_dataset_version",
-      "created_at",
-      "outreach_session",
-      "tester_label",
-      "language_pack",
-      "deployment_site",
-      "field_name",
-      "field_value",
-      "field_source",
-      "field_confidence",
-      "field_status",
-      "evidence_quote",
-      "manually_edited",
-      "requires_review",
-      "qc_reason",
-      "prompt_step_id",
-      "prompt_viewed",
-      "prompt_recorded",
-      "recording_mode",
-      "recording_success",
-      "recording_attempt_number",
-      "rerecord_used",
-      "transcript_available",
-      "raw_transcript_present",
-      "corrected_transcript_present",
-      "saved_locally",
-      "sync_status",
-      "export_ready"
-    ];
-
-    // 21 fields per record now (8 original + 2 right/left lens + 6 astigmatism/
-    // toric/axis + 5 short-sighted — see AUDIT_FIELD_KEYS in lib/csv.ts), across 13 records.
-    const fieldsPerRecord = 21;
-    return (
-      expectEqual("longlist column list", (LONGLIST_CSV_COLUMNS as readonly string[]).join(","), expectedLonglistColumns.join(",")) ??
-      expectEqual("audit column list", (AUDIT_CSV_COLUMNS as readonly string[]).join(","), expectedAuditColumns.join(",")) ??
-      expectEqual("longlist row count (header + 13 records)", longlistLines.length, 14) ??
-      expectEqual("audit row count (header + 13 records x 20 fields)", auditLines.length, 1 + 13 * fieldsPerRecord)
-    );
-  }
-});
-
-// O. export_ready is false for every record that needs QC, and true for every clean one.
-cases.push({
-  name: "O. export_ready is correct for both needs-QC and clean records",
-  run: () => {
-    for (const record of seedDemoRecords()) {
-      const needsQc = recordNeedsQc(record);
-      const expectedExportReady = !needsQc;
-      const actualExportReady = !recordNeedsQc(record); // same derivation the CSV row builder uses
-      if (actualExportReady !== expectedExportReady) {
-        return `${record.client_id}: export_ready/qc_required disagree (needsQc=${needsQc})`;
+    const table = buildOoxiiDataLonglist(seedDemoRecords());
+    for (const row of table.rows) {
+      if (row[col(table, "qc_required")] === true && !String(row[col(table, "qc_reason_summary")]).trim()) {
+        return `row ${row[0]}: qc_required with empty qc_reason_summary`;
       }
     }
     return null;
+  }
+});
+
+// I. Aggregate insights stay consistent with the 6-record dataset.
+cases.push({
+  name: "I. Aggregate insights match the sample dataset",
+  run: () => {
+    const summary = computeInsights(seedDemoRecords());
+    return (
+      expectEqual("total records", summary.totalRecords, 6) ??
+      expectEqual("needs QC count", summary.needsQcCount, 3) ??
+      expectEqual("pending sync count", summary.pendingSyncCount, 1) ??
+      expectEqual("manual override count", summary.manualOverrideCount, 0)
+    );
+  }
+});
+
+// J. Region columns stay at city/state/country level and "No glasses dispensed" produces "Not applicable" frames.
+cases.push({
+  name: "J. Region granularity and not-dispensed frame handling",
+  run: () => {
+    const table = buildOoxiiDataLonglist(seedDemoRecords());
+    const r4 = dataRow(table, "C-489T");
+    return (
+      expectEqual("C-489T country", r4("country"), "Vanuatu") ??
+      expectEqual("C-489T state", r4("state"), "Shefa Province") ??
+      expectEqual("C-489T city", r4("city"), "Port Vila") ??
+      expectEqual("C-489T glasses_dispensed_status", r4("glasses_dispensed_status"), "Not dispensed") ??
+      expectEqual("C-489T frame_colour", r4("frame_colour"), "Not applicable")
+    );
   }
 });
 

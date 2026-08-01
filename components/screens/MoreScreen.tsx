@@ -34,7 +34,7 @@ export function MoreScreen({
 }: {
   isOnline: boolean;
   recordsNeedingQc: number;
-  /** True once at least one synthetic demo record (lib/demoRecords.ts) is currently saved — gates "Clear synthetic demo data". */
+  /** True once at least one sample record (lib/demoRecords.ts) is currently saved — gates "Clear sample records". */
   hasDemoRecords: boolean;
   /** More → Admin tools → "Show STT diagnostics" — off by default so a normal demo run never shows the technical recording-screen diagnostics panel. */
   showSttDiagnostics: boolean;
@@ -48,7 +48,7 @@ export function MoreScreen({
   onAdmin: () => void;
   /** Clears all saved local records/audio plus any in-progress client/recording/transcript/QC state — for rehearsing or re-recording a demo consistently. Does not touch login, language packs, or display settings. */
   onResetDemoData: () => void;
-  /** Appends the synthetic 12-record demo dataset (lib/demoRecords.ts) without touching any real, tester-created records — safe to run repeatedly, replaces any previously-loaded demo dataset. */
+  /** Appends the 6-record sample dataset (lib/demoRecords.ts) without touching any real, tester-created records — safe to run repeatedly, replaces any previously-loaded sample dataset. */
   onLoadDemoData: () => void;
   /** Removes only synthetic demo records, leaving every real record untouched. */
   onClearDemoData: () => void;
@@ -79,14 +79,14 @@ export function MoreScreen({
         <ListRow icon={<PenLine className="h-5 w-5" />} label="Prompt editor" onClick={onAdmin} />
         <ListRow
           icon={<DatabaseZap className="h-5 w-5" />}
-          label="Load synthetic demo data"
-          detail="Adds 12 synthetic demo records for Insights/QC/Export demos — no personal data"
+          label="Load sample records"
+          detail="Adds 6 sample records (one per demo case) for Insights/QC/Export previews — no personal data"
           onClick={() => setActiveConfirm("loadDemo")}
         />
         <ListRow
           icon={<Trash2 className="h-5 w-5" />}
-          label="Clear synthetic demo data"
-          detail={hasDemoRecords ? "Removes only the synthetic demo records — real records are kept" : "No synthetic demo records are currently loaded"}
+          label="Clear sample records"
+          detail={hasDemoRecords ? "Removes only the sample records — real records are kept" : "No sample records are currently loaded"}
           onClick={() => hasDemoRecords && setActiveConfirm("clearDemo")}
         />
         <ListRow icon={<RotateCcw className="h-5 w-5" />} label="Reset demo data" detail="For demo recording — clears ALL local records and current test" onClick={() => setActiveConfirm("reset")} />
@@ -105,7 +105,7 @@ export function MoreScreen({
       {activeConfirm === "loadDemo" && (
         <div className="mt-3 space-y-3 rounded-2xl border border-field-line p-4">
           <InfoCard>
-            This will add synthetic records for demo purposes. No personal data is included. Your real saved
+            This will add 6 sample records (marked demo_record) for presentation purposes. No personal data is included. Your real saved
             records, if any, are kept untouched.
           </InfoCard>
           <div className="flex gap-3">
@@ -127,7 +127,7 @@ export function MoreScreen({
 
       {activeConfirm === "clearDemo" && (
         <div className="mt-3 space-y-3 rounded-2xl border border-[var(--danger)] p-4">
-          <WarningCard>This removes only the synthetic demo records on this device. Real, tester-created records are kept. This cannot be undone.</WarningCard>
+          <WarningCard>This removes only the sample records on this device. Real, tester-created records are kept. This cannot be undone.</WarningCard>
           <div className="flex gap-3">
             <SecondaryButton fullWidth onClick={() => setActiveConfirm(null)}>
               Cancel

@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test:extraction": "tsx scripts/test-field-extraction.ts",
-    "test:demo-data": "tsx scripts/test-demo-data.ts"
+    "test:demo-data": "tsx scripts/test-demo-data.ts",
+    "test:exports": "tsx scripts/test-demo-data.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

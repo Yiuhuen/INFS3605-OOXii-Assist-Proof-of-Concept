@@ -52,6 +52,8 @@ export interface ExtractedFields {
   current_glasses: string;
   right_eye_distance_result: string;
   left_eye_distance_result: string;
+  /** Unaided both-eyes line (mirrors OOXii's pretest.bothEyes.ooxiiLine) — optional: not part of the app's fixed 4-step prompt sequence, so absence is a normal "Not recorded" state, never Missing and never a QC trigger. */
+  both_eyes_line: string;
   final_readable_line: string;
   /** Overall glasses-fitting outcome (e.g. "+1.00 reading glasses", "No glasses dispensed") — kept as the single dispensed/selection summary field; right_lens_selected/left_lens_selected below carry the per-eye split. */
   glasses_selected: string;
@@ -124,6 +126,7 @@ export function createEmptyManualFields(): ManualExtractedFields {
     current_glasses: "",
     right_eye_distance_result: "",
     left_eye_distance_result: "",
+    both_eyes_line: "",
     final_readable_line: "",
     glasses_selected: "",
     right_lens_selected: "",
@@ -149,6 +152,44 @@ export function createEmptyExtractedFields(): ExtractedFields {
     missing_fields: [...REQUIRED_EXTRACTED_FIELDS],
     confidence_score: 0
   };
+}
+
+/**
+ * Optional operational/session metadata carried for export reporting —
+ * mirrors OOXii's own record structure (regionSelection.selectedRegion,
+ * completion.checklist, dispensing frame details) at a deliberately
+ * non-personal grain: region is city/state/country ONLY (never a street
+ * address or GPS coordinate — those fields do not exist anywhere in this
+ * app). Populated by the synthetic demo seed today; real records may leave
+ * it undefined, in which case exports fall back to honest "Not recorded"
+ * values instead of blanks (see lib/csv.ts).
+ */
+export interface OperationalMeta {
+  /** Clinic/deployment identifier, e.g. "CL-LAE-01" — an operational ID, never a street address. */
+  clinic_id: string;
+  /** Sequential session number within the outreach day/cohort. */
+  session_number: number;
+  /** Which guided module produced this record, e.g. "wheel_paddle". */
+  active_test_module: string;
+  /** ISO timestamp the session was completed (distinct from updated_at, which moves on every edit). */
+  completed_at: string;
+  region_country: string;
+  region_state: string;
+  region_city: string;
+  /** Dispensing frame details — only meaningful when glasses were actually dispensed. */
+  frame_colour: string;
+  frame_size: string;
+  frame_type: string;
+  /** Completion checklist (mirrors OOXii's completion.checklist codes). */
+  checklist_results_card_completed: boolean;
+  checklist_care_instructions_given: boolean;
+  checklist_return_if_problem: boolean;
+  checklist_regular_eye_health_checks: boolean;
+  /** Tester label (never a real name) of whoever reviewed/approved the record — empty until reviewed. */
+  reviewed_by: string;
+  reviewed_at: string;
+  /** Short, non-personal session comment for the operational export (mirrors completion.sessionComments). */
+  session_comment: string;
 }
 
 export interface TestRecord {
@@ -237,6 +278,8 @@ export interface TestRecord {
   demo_dataset_version: string;
   /** Cosmetic display-name override for the language_pack CSV/UI column — empty means "use LANGUAGE_LABELS[language]". Exists only so the synthetic demo dataset can show illustrative names (e.g. "Cantonese") for outreach variety without inventing a fake LanguageCode — the real `language` field above always stays a genuine supported code. */
   language_pack_label: string;
+  /** Optional operational/session metadata for export reporting — see OperationalMeta. Absent on records created before this field existed; exports fall back to honest "Not recorded" values. */
+  operational?: OperationalMeta;
   client_snapshot: ClientRecord;
   created_at: string;
   updated_at: string;

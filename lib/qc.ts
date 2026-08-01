@@ -725,6 +725,10 @@ const SUMMARY_FIELD_ORDER: Array<keyof ManualExtractedFields> = ["right_eye_dist
  * not captured" (the field itself is the problem).
  */
 export function qcReasonSummary(record: TestRecord): string {
+  // Mirrors recordNeedsQc's terminal sign-off: an Approved record (without a
+  // genuine sync failure) is done — its export row must never carry a stale
+  // "what's wrong" sentence next to qc_required=false.
+  if (record.qc_status === "Approved" && record.sync_status !== "Failed") return "";
   const effective = record.edited_extracted_json ?? record.extracted_json;
   const fieldConfidence = effective.field_confidence;
   const parts: string[] = [];
@@ -757,6 +761,31 @@ export function qcReasonSummary(record: TestRecord): string {
         parts.push(record.has_unvisited_prompts ? "missing glasses selected / dispensed" : "glasses selected / dispensed not captured");
       } else if (glassesMeta.source === "manual") {
         parts.push("glasses selected / dispensed manually entered — verify before approval");
+      }
+    }
+  }
+
+  // Optional-module incompleteness (astigmatism mentioned but toric/axis
+  // missing, short-sighted performed but a result missing) — surface the
+  // spec-worded per-field reason so the operational export never shows
+  // qc_required=true beside an empty reason cell. Never fires for the plain
+  // "not mentioned"/"Not tested" case, because those values never carry a
+  // requiresReview reason (see lib/fieldExtraction.ts).
+  if (fieldConfidence) {
+    OPTIONAL_MODULE_FIELD_KEYS.forEach((key) => {
+      const meta = fieldConfidence[key as keyof ManualExtractedFields];
+      if (meta && meta.requiresReview && meta.reason && !meta.value.trim()) {
+        parts.push(meta.reason.replace(/\.$/, "").charAt(0).toLowerCase() + meta.reason.replace(/\.$/, "").slice(1));
+      }
+    });
+    // High-risk fields the tester corrected during review (other than
+    // glasses_selected, phrased above) — the correction itself is the thing
+    // a QC reviewer verifies before approval.
+    for (const key of HIGH_RISK_EXTRACTED_FIELDS) {
+      if (key === "glasses_selected") continue;
+      const meta = fieldConfidence[key];
+      if (meta?.value.trim() && meta.source === "manual") {
+        parts.push(`${FIELD_DISPLAY_LABELS[key].toLowerCase()} corrected by tester — verify before approval`);
       }
     }
   }

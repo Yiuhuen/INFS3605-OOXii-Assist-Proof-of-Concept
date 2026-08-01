@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, FlaskConical, ListChecks, RefreshCw, RotateCcw, Save, ScrollText, ShieldAlert, ShieldCheck, Sparkles } from "lucide-react";
 import {
   NOT_TESTED_FIELD_VALUE,
@@ -122,6 +122,55 @@ const NEW_MODULE_FIELD_KEYS = new Set<keyof ManualExtractedFields>([
   "short_sighted_test_performed",
   ...SHORT_SIGHTED_FIELD_ORDER
 ]);
+
+/**
+ * Controlled options for Missing/Check field correction — lets a reviewer
+ * pick from a closed vocabulary instead of free-typing, while still calling
+ * the same onEditField path free text always has (so QC/export status and
+ * source classification are unaffected — see lib/csv.ts auditFieldSource).
+ * "Not captured" (the implicit first option, not listed here) always maps to
+ * the empty string and is a no-op, not an edit — see renderFieldCard.
+ * Fields not in this map (glasses_selected, short_sighted_notes,
+ * additional_notes) keep the plain free-text input for every status.
+ */
+const LINE_OPTIONS = ["Line 1", "Line 2", "Line 3", "Line 4", "Line 5", "Line 6", "Line 7"];
+const LENS_POWER_OPTIONS = ["No lens selected", "+0.75", "+1.00", "+1.50", "+2.00", "-0.50", "-1.00", "-1.50", "-2.00"];
+const TORIC_POWER_OPTIONS = ["T1", "T1.5", "T2", "T2.5"];
+const AXIS_OPTIONS = ["0", "35", "75", "90"];
+const SHORT_SIGHTED_RESULT_OPTIONS = [NOT_TESTED_FIELD_VALUE, ...LINE_OPTIONS, "Unable to read chart", "Unclear"];
+
+const CONTROLLED_FIELD_OPTIONS: Partial<Record<keyof ManualExtractedFields, string[]>> = {
+  current_glasses: ["Yes", "No", "Client unsure"],
+  cataract_history_confirmed: ["No cataract surgery reported", "Cataract surgery reported", "Client unsure"],
+  right_eye_distance_result: [...LINE_OPTIONS, "Unable to read chart", "Unclear"],
+  left_eye_distance_result: [...LINE_OPTIONS, "Unable to read chart", "Unclear"],
+  both_eyes_line: [...LINE_OPTIONS, "Unclear"],
+  final_readable_line: [...LINE_OPTIONS, "Unclear"],
+  comfort_response: ["Comfortable", "Uncomfortable", "Blurry", "Dizzy", "Client unsure", "Unclear"],
+  right_lens_selected: LENS_POWER_OPTIONS,
+  left_lens_selected: LENS_POWER_OPTIONS,
+  right_astigmatism_present: ["Yes", "No", "Unclear"],
+  left_astigmatism_present: ["Yes", "No", "Unclear"],
+  right_toric_power: TORIC_POWER_OPTIONS,
+  left_toric_power: TORIC_POWER_OPTIONS,
+  right_toric_axis: AXIS_OPTIONS,
+  left_toric_axis: AXIS_OPTIONS,
+  short_sighted_test_performed: ["Yes", "No", "Not applicable"],
+  short_sighted_right_result: SHORT_SIGHTED_RESULT_OPTIONS,
+  short_sighted_left_result: SHORT_SIGHTED_RESULT_OPTIONS,
+  short_sighted_both_eyes_result: SHORT_SIGHTED_RESULT_OPTIONS
+};
+
+/** Fields whose option list is open-ended enough (lens powers, toric power, axis) that a value outside the preset list is a real, expected case — these get an "Other / manual entry" option that reveals a free-text input. Everything else in CONTROLLED_FIELD_OPTIONS is a closed vocabulary by design. */
+const FIELDS_WITH_OTHER_ENTRY = new Set<keyof ManualExtractedFields>([
+  "right_lens_selected",
+  "left_lens_selected",
+  "right_toric_power",
+  "left_toric_power",
+  "right_toric_axis",
+  "left_toric_axis"
+]);
+const OTHER_OPTION_VALUE = "__other__";
 
 /** Review order (spec): Missing -> Check -> Captured -> Reviewed, so a reviewer clears the gaps before skimming what's already confirmed. */
 const REVIEW_PRIORITY: Record<"unknown" | "needs_review" | "captured" | "reviewed", number> = {
@@ -366,6 +415,17 @@ export function ReviewScreen({
   const [fullTranscriptExpanded, setFullTranscriptExpanded] = useState(false);
   /** Evidence phrase to spotlight in the transcript once expanded — set by a field's "View in transcript" link, so evidence highlighting stays in-page instead of a separate modal jump. */
   const [focusedEvidence, setFocusedEvidence] = useState<string | undefined>(undefined);
+  /** True when the browser genuinely fails to decode/play audioUrl (mislabeled blob, corrupt data) — distinct from audioUrl simply being empty. Both cases show the same polished fallback, never the browser's native broken-audio state. Reset via key={audioUrl} on the <audio> element below, so a fresh recording always gets a clean retry. */
+  const [audioPlaybackError, setAudioPlaybackError] = useState(false);
+  /** Per-field "Other / manual entry" mode for controlled-dropdown fields — a field enters this once the tester explicitly picks "Other", and stays in it (even if the value is later cleared) until they pick a real listed option instead. */
+  const [otherEntryOpen, setOtherEntryOpen] = useState<Partial<Record<keyof ManualExtractedFields, boolean>>>({});
+
+  // A fresh recording (new audioUrl) always deserves a clean playback retry —
+  // a decode error on a discarded attempt must never carry over and hide a
+  // perfectly good rerecorded clip behind the fallback message.
+  useEffect(() => {
+    setAudioPlaybackError(false);
+  }, [audioUrl]);
 
   const effective = editedFields ?? extracted;
   const lowConfidence = effective.confidence_score < 0.7 || effective.missing_fields.length > 0;
@@ -432,6 +492,33 @@ export function ReviewScreen({
       if (status === "manual" && isHighRisk) detailParts.push("Needs QC");
     }
 
+    // Controlled dropdown only while a field is still Missing/Check — once a
+    // value lands (whether via the dropdown or the "Other" text box below)
+    // the field becomes "manual" status and falls through to the same plain
+    // input every already-captured field uses, exactly like free text always
+    // has. onEditField is the same handler either way, so QC/export
+    // classification (lib/csv.ts auditFieldSource) is unaffected.
+    const controlledOptions = CONTROLLED_FIELD_OPTIONS[key];
+    const showDropdown = Boolean(controlledOptions) && (status === "unknown" || status === "needs_review");
+    const allowsOther = FIELDS_WITH_OTHER_ENTRY.has(key);
+    const currentValue = rawValue === UNKNOWN_FIELD_VALUE ? "" : rawValue;
+    const matchesListedOption = Boolean(controlledOptions?.includes(currentValue));
+    const showOtherInput = showDropdown && allowsOther && (otherEntryOpen[key] || (Boolean(currentValue) && !matchesListedOption));
+    const selectValue = showOtherInput ? OTHER_OPTION_VALUE : matchesListedOption ? currentValue : "";
+
+    function handleControlledSelect(value: string) {
+      if (value === OTHER_OPTION_VALUE) {
+        setOtherEntryOpen((prev) => ({ ...prev, [key]: true }));
+        return;
+      }
+      if (otherEntryOpen[key]) setOtherEntryOpen((prev) => ({ ...prev, [key]: false }));
+      // "Not captured" (the blank first option) means nothing was chosen —
+      // a no-op, not an edit, so an untouched Missing field stays Missing
+      // rather than flipping to "Edited" with no real value behind it.
+      if (!value) return;
+      onEditField(key, value);
+    }
+
     return (
       <label
         key={key}
@@ -441,12 +528,39 @@ export function ReviewScreen({
           <span className="text-xs font-bold leading-snug opacity-90">{FIELD_DISPLAY_LABELS[key]}</span>
           <StatusDot label={presentation.label} tone={presentation.tone} className="shrink-0" />
         </span>
-        <input
-          className="field-input mt-1.5 min-h-[2.75rem] px-3 text-sm"
-          value={rawValue === UNKNOWN_FIELD_VALUE ? "" : rawValue}
-          placeholder={hasValue ? undefined : "Not captured"}
-          onChange={(event) => onEditField(key, event.target.value)}
-        />
+        {showDropdown ? (
+          <>
+            <select
+              className="field-input mt-1.5 min-h-[2.75rem] px-3 text-sm"
+              value={selectValue}
+              onChange={(event) => handleControlledSelect(event.target.value)}
+            >
+              <option value="">Not captured</option>
+              {controlledOptions!.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+              {allowsOther && <option value={OTHER_OPTION_VALUE}>Other / manual entry</option>}
+            </select>
+            {showOtherInput && (
+              <input
+                className="field-input mt-1.5 min-h-[2.75rem] px-3 text-sm"
+                placeholder="Enter value"
+                value={currentValue}
+                onChange={(event) => onEditField(key, event.target.value)}
+                autoFocus
+              />
+            )}
+          </>
+        ) : (
+          <input
+            className="field-input mt-1.5 min-h-[2.75rem] px-3 text-sm"
+            value={rawValue === UNKNOWN_FIELD_VALUE ? "" : rawValue}
+            placeholder={hasValue ? undefined : "Not captured"}
+            onChange={(event) => onEditField(key, event.target.value)}
+          />
+        )}
         {detailParts.length > 0 && <p className="mt-1 text-[11px] opacity-60">{detailParts.join(" · ")}</p>}
         {fieldMeta?.evidence && hasValue && (
           <button
@@ -465,7 +579,10 @@ export function ReviewScreen({
         {status === "unknown" && (
           <p className="mt-1 text-[11px] opacity-60">No transcript evidence found — enter manually or leave for QC.</p>
         )}
-        {status !== "unknown" && fieldMeta?.reason && <p className="mt-1 text-[11px] opacity-60">{fieldMeta.reason}</p>}
+        {status === "manual" && !fieldMeta?.evidence && (
+          <p className="mt-1 text-[11px] opacity-60">No transcript evidence found — reviewed manually.</p>
+        )}
+        {status !== "unknown" && status !== "manual" && fieldMeta?.reason && <p className="mt-1 text-[11px] opacity-60">{fieldMeta.reason}</p>}
         {fieldSuggestions[key] && (
           <button
             type="button"
@@ -634,7 +751,17 @@ export function ReviewScreen({
           <p className="text-xs font-bold opacity-80">Audio record</p>
           <span className="text-xs font-semibold tabular-nums opacity-70">{formatDuration(recordingDurationSeconds)}</span>
         </div>
-        {audioUrl ? <audio className="h-8 shrink-0 w-full" controls src={audioUrl} /> : <p className="shrink-0 text-xs opacity-60">No audio available.</p>}
+        {audioUrl && !audioPlaybackError ? (
+          <audio
+            key={audioUrl}
+            className="h-8 shrink-0 w-full"
+            controls
+            src={audioUrl}
+            onError={() => setAudioPlaybackError(true)}
+          />
+        ) : (
+          <p className="shrink-0 text-xs opacity-60">Audio unavailable — review transcript and captured fields manually.</p>
+        )}
 
         {hasRecordingNotes && (
           <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs opacity-80">
@@ -684,19 +811,29 @@ export function ReviewScreen({
           </Disclosure>
         </div>
 
-        <div className="flex shrink-0 items-center justify-between gap-2">
+        <div className="shrink-0">
           <button
             className="text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline"
             onClick={() => setTranscriptDetailOpen(true)}
           >
             View full transcript &amp; details
           </button>
-          {demoHelpersEnabled && (
-            <SecondaryButton className="px-2 py-1 text-xs" icon={<FlaskConical className="h-3.5 w-3.5" />} onClick={onInsertDemoTranscript}>
-              Insert demo transcript
-            </SecondaryButton>
-          )}
         </div>
+
+        {/* Collapsed, closed by default — never a normal-looking action on
+            the review flow a demo audience sees. demoHelpersEnabled itself
+            is already false in any real deployment (see lib/demoHelpers.ts);
+            this only changes how it looks in the dev/rehearsal build that
+            IS used for screen recording. */}
+        {demoHelpersEnabled && (
+          <div className="shrink-0">
+            <Disclosure label="Demo tools">
+              <SecondaryButton className="px-2 py-1 text-xs" icon={<FlaskConical className="h-3.5 w-3.5" />} onClick={onInsertDemoTranscript}>
+                Insert sample transcript
+              </SecondaryButton>
+            </Disclosure>
+          </div>
+        )}
       </div>
 
       <DetailModal open={allFieldsOpen} title="All captured fields" onClose={() => setAllFieldsOpen(false)}>

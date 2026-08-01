@@ -156,6 +156,21 @@ function isDuplicateFinalSegment(lastSegment: TranscriptSegment | undefined, tex
   return Date.now() - new Date(lastSegment.timestamp).getTime() < DUPLICATE_FINAL_SEGMENT_WINDOW_MS;
 }
 
+/**
+ * Preferred codecs in priority order — opus in webm/ogg encodes cleanly on
+ * Chrome/Firefox/Android; audio/mp4 is what Safari (desktop + iOS 14.3+)
+ * actually supports, since Safari has no webm/ogg decoder at all. Checked
+ * with MediaRecorder.isTypeSupported rather than assumed, so this never
+ * requests a codec the current browser can't actually record.
+ */
+const AUDIO_MIME_PREFERENCES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus", "audio/ogg"];
+
+/** Returns undefined (browser default) when isTypeSupported is unavailable or nothing in the preference list is supported — startRecording falls back to today's plain `new MediaRecorder(stream)` in that case. */
+function pickSupportedAudioMimeType(): string | undefined {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return undefined;
+  return AUDIO_MIME_PREFERENCES.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
 const MANUAL_FIELD_KEYS: Array<keyof ManualExtractedFields> = [
   "comfort_response",
   "cataract_history_confirmed",
@@ -752,8 +767,9 @@ export default function Home() {
   }
 
   /**
-   * "Load synthetic demo data" (More → Admin tools) — appends the 12
-   * deterministic synthetic records from lib/demoRecords.ts so Insights/QC/
+   * "Load sample records" (More → Admin tools, and the Export screen's
+   * empty state) — appends the 6 deterministic sample records from
+   * lib/demoRecords.ts (one per presentation case) so Insights/QC/
    * Export have realistic data to show. Never touches real, tester-created
    * records (see appendDemoRecords in lib/storage.ts) — re-running this
    * replaces any previously-loaded demo dataset rather than duplicating it.
@@ -1042,7 +1058,14 @@ export default function Home() {
     startLiveTranscript();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const preferredMimeType = pickSupportedAudioMimeType();
+      let recorder: MediaRecorder;
+      try {
+        recorder = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
+      } catch {
+        // isTypeSupported said yes but construction still threw (rare, engine-specific) — fall back to letting the browser pick its own default rather than failing the whole recording.
+        recorder = new MediaRecorder(stream);
+      }
       audioChunksRef.current = [];
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
@@ -2118,8 +2141,11 @@ export default function Home() {
         <ExportScreen
           records={records}
           isOnline={isOnline}
+          hasDemoRecords={records.some((record) => record.demo_record)}
           onExportLonglist={handleExportLonglist}
           onExportAudit={handleExportAudit}
+          onLoadSampleRecords={loadDemoData}
+          onClearSampleRecords={clearDemoDataOnly}
           onClear={() => {
             clearRecords();
             clearAllAudioBlobs().catch(() => {

@@ -65,8 +65,21 @@ export function CompactHeader({
   right?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 pb-2">
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+    // flex-wrap (not a fixed single row): at very narrow widths (320px) the
+    // title's reserved min-w below plus the shrink-0 badge cluster can't both
+    // fit on one line — wrapping drops the badges to their own row under the
+    // title instead of squeezing the title into a truncated "Revie…". At
+    // 375px+ everything still fits on one row, unchanged from before.
+    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pb-2">
+      {/* Deliberately no min-w-0 here: this block's default (content-based)
+          min-width is what tells the row's flex-wrap algorithm its true
+          minimum size (back button + gap + the title's own min-w below), so
+          wrap can correctly kick the badge cluster to its own row once that
+          minimum won't fit. min-w-0 previously let this box report a
+          near-zero minimum to the wrap calculation, so wrap never triggered
+          — the title's min-w still held internally, and instead overflowed
+          out of this now-too-small box into the badges next to it. */}
+      <div className="flex flex-1 items-center gap-2">
         {onBack && (
           <button
             aria-label="Back"
@@ -76,7 +89,10 @@ export function CompactHeader({
             <ChevronLeft className="h-4 w-4" />
           </button>
         )}
-        <div className="min-w-0">
+        {/* min-w reserves enough room for a title like "Review test" to never
+            truncate mid-word — only the badge cluster gives way (wraps) once
+            space is this tight, never the title itself. */}
+        <div className="min-w-[7.5rem] flex-1">
           {subtitle && <p className="truncate text-[10px] font-bold text-field-muted">{subtitle}</p>}
           <h1 className="truncate text-base font-black leading-tight">{title}</h1>
         </div>

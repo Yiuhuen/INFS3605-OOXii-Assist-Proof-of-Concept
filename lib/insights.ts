@@ -21,6 +21,7 @@ const FIELD_LABELS: Record<keyof Omit<ExtractedFields, "missing_fields" | "confi
   current_glasses: "Current glasses",
   right_eye_distance_result: "Right eye distance result",
   left_eye_distance_result: "Left eye distance result",
+  both_eyes_line: "Both eyes line",
   final_readable_line: "Final readable line",
   glasses_selected: "Glasses selected",
   right_lens_selected: "Right lens selected",
