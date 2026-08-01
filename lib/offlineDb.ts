@@ -45,3 +45,15 @@ export async function getAudioBlob(recordId: string): Promise<Blob | null> {
   db.close();
   return result;
 }
+
+/** Used by the demo reset — clears every locally stored audio blob alongside lib/storage.ts clearRecords(), so a reset does not leave orphaned recordings in IndexedDB. */
+export async function clearAllAudioBlobs(): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, "readwrite");
+    tx.objectStore(AUDIO_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("Unable to clear audio blobs."));
+  });
+  db.close();
+}

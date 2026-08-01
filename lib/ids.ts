@@ -11,3 +11,17 @@ export function generateRecordId() {
   }
   return `TR-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 }
+
+export function generateSegmentId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `SEG-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+}
+
+export function generateMarkerId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `MRK-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+}

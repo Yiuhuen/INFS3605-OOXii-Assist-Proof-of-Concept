@@ -1,9 +1,10 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, ChevronLeft, Clock, Plus } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronLeft, Plus } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
-import { qcStatusLabel } from "@/lib/qc";
-import { PrimaryButton, SecondaryButton, StatusBadge } from "@/components/ui";
+import { processingStatusLabel, processingStatusTone, qcStatusLabel, syncStatusLabel } from "@/lib/qc";
+import { PrimaryButton, SecondaryButton, StatusDot } from "@/components/ui";
+import { OneScreenShell, BottomActionBar } from "@/components/layout/OneScreenShell";
 
 export function SavedScreen({
   record,
@@ -18,59 +19,67 @@ export function SavedScreen({
   onQc: () => void;
   onDashboard: () => void;
 }) {
+  const savedTitle =
+    record.sync_status === "Pending sync"
+      ? "Saved offline"
+      : record.sync_status === "Failed" || record.sync_status === "Local only"
+        ? "Saved locally"
+        : "Record saved";
+  const processingIncomplete = record.processing_status === "not_processed" || record.processing_status === "needs_qc";
+  const qcRequired = record.qc_status !== "Approved";
+
   return (
-    <section className="mx-auto max-w-md text-center">
-      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--good-bg)] text-[var(--good)]">
-        <CheckCircle2 className="h-9 w-9" />
-      </div>
-      <h1 className="text-2xl font-black">Saved offline</h1>
-      <p className="mt-2 opacity-70">Record is safe on this phone.</p>
+    <OneScreenShell
+      header={null}
+      footer={
+        <BottomActionBar className="flex-col items-stretch gap-2">
+          <p className="line-clamp-1 text-center text-xs opacity-60">{syncMessage || "Syncs automatically when online — keep testing offline."}</p>
+          <PrimaryButton fullWidth className="py-2.5 text-sm" icon={<Plus className="h-4 w-4" />} onClick={onNextClient}>
+            Start next client
+          </PrimaryButton>
+          <div className="grid grid-cols-2 gap-2">
+            <SecondaryButton className="py-2 text-sm" icon={<AlertTriangle className="h-4 w-4" />} onClick={onQc}>
+              QC Review
+            </SecondaryButton>
+            <SecondaryButton className="py-2 text-sm" icon={<ChevronLeft className="h-4 w-4" />} onClick={onDashboard}>
+              Home
+            </SecondaryButton>
+          </div>
+        </BottomActionBar>
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 overflow-y-auto text-center">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--good-bg)] text-[var(--good)]">
+          <CheckCircle2 className="h-7 w-7" />
+        </div>
+        <div>
+          <h1 className="text-xl font-black">{savedTitle}</h1>
+          <p className="mt-1 line-clamp-1 text-sm opacity-70">Client {record.client_id} — audio and answers stored on this phone.</p>
+        </div>
 
-      <div className="field-card mt-6 space-y-3 text-left">
-        <div className="flex items-center justify-between">
-          <span className="text-sm opacity-70">Client ID</span>
-          <span className="font-bold text-[var(--gold)]">{record.client_id}</span>
+        {/* One status dot per row, same vocabulary as QC's record summary — never a stack of pills. */}
+        <div className="field-card w-full space-y-2 text-left text-sm">
+          <div className="flex items-center justify-between">
+            <span className="opacity-70">Sync status</span>
+            <StatusDot label={syncStatusLabel(record.sync_status)} tone={record.sync_status === "Synced" ? "good" : "warn"} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="opacity-70">QC status</span>
+            <StatusDot label={qcStatusLabel(record.qc_status)} tone={record.qc_status === "Approved" ? "good" : "warn"} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="opacity-70">Processing</span>
+            <StatusDot label={processingStatusLabel(record.processing_status)} tone={processingStatusTone(record.processing_status)} />
+          </div>
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-sm opacity-70">Time saved</span>
-          <span className="font-bold">{new Date(record.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-        </div>
-        <div className="h-px bg-field-line" />
-        <div className="flex items-center justify-between">
-          <span className="text-sm opacity-70">Sync status</span>
-          <StatusBadge
-            label={record.sync_status}
-            tone={record.sync_status === "Synced" ? "good" : "warn"}
-            icon={<Clock className="h-3.5 w-3.5" />}
-          />
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-sm opacity-70">QC status</span>
-          <StatusBadge
-            label={qcStatusLabel(record.qc_status)}
-            tone={record.qc_status === "Approved" ? "good" : "warn"}
-            icon={<AlertTriangle className="h-3.5 w-3.5" />}
-          />
-        </div>
-      </div>
 
-      <p className="mt-4 text-sm opacity-60">
-        {syncMessage || "This record will sync automatically when a connection is available. You can keep testing offline."}
-      </p>
-
-      <div className="mt-6 space-y-3">
-        <PrimaryButton fullWidth icon={<Plus className="h-5 w-5" />} onClick={onNextClient}>
-          Start next client
-        </PrimaryButton>
-        <div className="grid grid-cols-2 gap-3">
-          <SecondaryButton icon={<AlertTriangle className="h-4 w-4" />} onClick={onQc}>
-            QC Review
-          </SecondaryButton>
-          <SecondaryButton icon={<ChevronLeft className="h-4 w-4" />} onClick={onDashboard}>
-            Home
-          </SecondaryButton>
-        </div>
+        {(processingIncomplete || qcRequired) && (
+          <p className="line-clamp-2 text-xs font-semibold text-[var(--warn)]">
+            {processingIncomplete ? "Processing incomplete — " : ""}
+            {qcRequired ? "QC required before final reporting." : ""}
+          </p>
+        )}
       </div>
-    </section>
+    </OneScreenShell>
   );
 }

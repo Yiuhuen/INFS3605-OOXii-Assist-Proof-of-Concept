@@ -4,6 +4,15 @@ import type { TestRecord } from "./types";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+/**
+ * Optional, not a hard dependency — the whole field workflow (record, review,
+ * QC, export) already works fully offline against localStorage/IndexedDB
+ * (see lib/storage.ts, lib/offlineDb.ts). When these two env vars are set,
+ * "Tester setup" gains an email/password path (see LoginScreen.tsx) and
+ * saved records get an extra best-effort cloud copy. Week 7 ships with demo
+ * tester only; wiring a production tester roster to Supabase auth here is a
+ * drop-in change, not a redesign.
+ */
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 export const supabase = isSupabaseConfigured ? createClient(supabaseUrl!, supabaseAnonKey!) : null;
 
@@ -12,16 +21,26 @@ export async function syncRecordToSupabase(record: TestRecord) {
 
   const { error } = await supabase.from("test_records").upsert({
     id: record.id,
+    session_id: record.session_id,
     client_id: record.client_id,
     tester_id: record.tester_id,
+    deployment_site: record.deployment_site,
     language: record.language,
     status: record.status,
     sync_status: record.sync_status,
     connection_status: record.connection_status,
     audio_local_url: record.audio_local_url,
     recording_status: record.recording_status,
+    recording_started_at: record.recording_started_at || null,
+    recording_stopped_at: record.recording_stopped_at || null,
+    recording_duration_seconds: record.recording_duration_seconds,
     manual_override_reason: record.manual_override_reason,
     raw_transcript_text: record.raw_transcript_text,
+    raw_transcript_language: record.raw_transcript_language,
+    english_processing_transcript: record.english_processing_transcript,
+    transcript_segments: record.transcript_segments,
+    prompt_markers: record.prompt_markers,
+    unclear_segments: record.unclear_segments,
     corrected_transcript_text: record.corrected_transcript_text,
     extracted_json: record.extracted_json,
     edited_extracted_json: record.edited_extracted_json,
@@ -32,6 +51,20 @@ export async function syncRecordToSupabase(record: TestRecord) {
     missing_fields: record.missing_fields,
     qc_status: record.qc_status,
     needs_qc: record.needs_qc,
+    qc_notes: record.qc_notes,
+    processing_status: record.processing_status,
+    sync_attempts: record.sync_attempts,
+    has_unvisited_prompts: record.has_unvisited_prompts,
+    has_unrecorded_viewed_prompts: record.has_unrecorded_viewed_prompts,
+    transcript_quality_risk: record.transcript_quality_risk,
+    transcript_quality_flags: record.transcript_quality_flags,
+    suggested_corrections: record.suggested_corrections,
+    corrections_applied: record.corrections_applied,
+    unresolved_transcript_flag_ids: record.unresolved_transcript_flag_ids,
+    translation_review_required: record.translation_review_required,
+    extraction_safety_status: record.extraction_safety_status,
+    fields_reviewed_by_tester: record.fields_reviewed_by_tester,
+    demo_helper_used: record.demo_helper_used,
     client_snapshot: record.client_snapshot,
     created_at: record.created_at,
     updated_at: record.updated_at

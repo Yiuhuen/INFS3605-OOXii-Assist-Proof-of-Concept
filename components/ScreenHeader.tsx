@@ -9,16 +9,19 @@ export function ScreenHeader({
   subtitle,
   onBack,
   isOnline,
-  right
+  right,
+  dense
 }: {
   title: string;
   subtitle?: string;
   onBack?: () => void;
   isOnline: boolean;
   right?: ReactNode;
+  /** Tighter header for screens that need every pixel (e.g. Recording) — mb-3 instead of mb-6. */
+  dense?: boolean;
 }) {
   return (
-    <div className="mb-6 flex items-center justify-between gap-3">
+    <div className={`${dense ? "mb-3" : "mb-6"} flex items-center justify-between gap-3`}>
       <div className="flex min-w-0 flex-1 items-center gap-3">
         {onBack && (
           <button
@@ -30,7 +33,7 @@ export function ScreenHeader({
           </button>
         )}
         <div className="min-w-0">
-          {subtitle && <p className="truncate text-xs font-bold uppercase tracking-wide text-field-muted">{subtitle}</p>}
+          {subtitle && <p className="truncate text-xs font-bold text-field-muted">{subtitle}</p>}
           <h1 className="text-lg font-black leading-tight">{title}</h1>
         </div>
       </div>

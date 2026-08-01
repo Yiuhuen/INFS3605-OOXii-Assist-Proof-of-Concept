@@ -83,6 +83,7 @@
 html {
   min-height: 100%;
   background: var(--bg-ink);
+  overflow-x: hidden;
 }
 
 body {
@@ -91,6 +92,7 @@ body {
   background: var(--bg-ink);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
 }
 
 button,
@@ -112,22 +114,45 @@ textarea:focus-visible {
 @layer components {
   /* Surfaces */
   .field-card {
+    @apply p-4 sm:p-5;
     border-radius: 1.25rem;
     border: 1px solid var(--line);
     background: var(--bg-card);
-    padding: 1.25rem;
   }
 
   .field-card-soft {
+    @apply p-4 sm:p-5;
     border-radius: 1.25rem;
     background: var(--bg-surface);
-    padding: 1.25rem;
   }
 
   .ink-panel {
     border-radius: 1rem;
     padding: 1.1rem;
     background: var(--bg-deep);
+  }
+
+  /* Transcript highlighting — never colour alone: bold + underline + background so it still reads in high-contrast mode. */
+  .transcript-highlight {
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-color: var(--gold);
+    text-underline-offset: 2px;
+    background: var(--gold-tint);
+    border-radius: 0.2rem;
+    padding: 0 0.15rem;
+  }
+
+  .transcript-highlight-focus {
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 2px;
+    background: var(--gold);
+    color: var(--gold-ink);
+    border-radius: 0.25rem;
+    padding: 0 0.2rem;
+    box-shadow: 0 0 0 2px var(--gold-strong);
   }
 
   /* Inputs */
@@ -153,13 +178,23 @@ textarea:focus-visible {
 
   /* Buttons */
   .primary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl border px-5 py-3 text-base font-bold transition disabled:cursor-not-allowed;
+    border-color: transparent;
     background: var(--gold);
     color: var(--gold-ink);
   }
 
   .primary-button:hover:not(:disabled) {
     background: var(--gold-strong);
+  }
+
+  /* A translucent gold at low opacity reads as a muddy brown, not "disabled" —
+     use a clearly neutral/greyed treatment instead so enabled vs. disabled is
+     never ambiguous. */
+  .primary-button:disabled {
+    border-color: var(--line);
+    background: var(--bg-surface);
+    color: var(--muted);
   }
 
   .primary-button-lg {
@@ -195,12 +230,48 @@ textarea:focus-visible {
     background: var(--record-strong);
   }
 
-  /* Badges */
+  /* Badges — sentence case, never uppercase tracking; reserved for the few
+     places a bordered pill is still the right call (headers, admin panels).
+     Workflow rows use .status-dot instead. */
   .status-pill {
-    @apply inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide;
+    @apply inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold;
     border: 1px solid var(--line);
     background: var(--bg-surface);
     color: var(--muted);
+  }
+
+  /* Calm status row indicator: small dot + sentence-case text. The default
+     replacement for StatusBadge in workflow rows — one per row, no border,
+     no background, no uppercase. */
+  .status-dot {
+    @apply inline-flex items-center gap-1.5 text-xs font-semibold;
+    color: var(--text);
+  }
+
+  .status-dot::before {
+    content: "";
+    @apply h-2 w-2 shrink-0 rounded-full;
+    background: var(--muted);
+  }
+
+  .status-dot.is-good::before {
+    background: var(--good);
+  }
+
+  .status-dot.is-warn::before {
+    background: var(--warn);
+  }
+
+  .status-dot.is-danger::before {
+    background: var(--danger);
+  }
+
+  .status-dot.is-muted {
+    color: var(--muted);
+  }
+
+  .status-dot.is-muted::before {
+    background: var(--line);
   }
 
   .badge-warn {
@@ -249,19 +320,79 @@ textarea:focus-visible {
      recording screen, so it gets its own gold-bordered card that nothing
      else on the page competes with. */
   .prompt-card {
+    @apply p-5 sm:p-6;
     border-radius: 1.5rem;
     border: 2px solid var(--gold);
     background: var(--bg-deep);
-    padding: 1.5rem;
   }
 
   /* Subdued version of .prompt-card for the guided-prompt (preview) screen,
      where the manual entry fields are the primary task, not the prompt. */
   .prompt-card-preview {
+    @apply p-5 sm:p-6;
     border-radius: 1.5rem;
     border: 1px solid var(--line);
     background: var(--bg-card);
-    padding: 1.5rem;
+  }
+
+  /* Compact sticky prompt card for the recording screen — keeps the active
+     client-facing prompt visible while the tester scrolls the recording
+     controls/live transcript below it, without the height cost of
+     .prompt-card's large hero treatment. */
+  .prompt-card-compact {
+    border-radius: 1rem;
+    border: 1px solid var(--gold);
+    background: var(--bg-ink);
+    /* The recording screen is now a fixed one-screen shell (see
+       OneScreenShell) rather than a scrolling page, so this card no longer
+       needs to stick past anything — it's just the first block in the
+       content row. Padding uses clamp() so it shrinks gracefully on short
+       viewports instead of eating into the fixed height budget. */
+    padding: clamp(0.5rem, 2vw, 0.75rem) clamp(0.65rem, 2.5vw, 0.9rem);
+  }
+
+  /* Client-facing prompt text on the recording screen — scales down on short
+     viewports (clamp min) so a long prompt sentence still fits within the
+     card's line-clamp budget instead of forcing the screen to scroll. */
+  .text-prompt {
+    font-size: clamp(0.95rem, 3.6vw, 1.125rem);
+    line-height: 1.3;
+  }
+
+  /* Small pill button for secondary actions that must not compete with the
+     prompt text — e.g. "Play aloud" / "Why this matters" on the recording
+     screen. Deliberately smaller than .secondary-button. */
+  .chip-button {
+    /* min-height keeps the tap area field-usable (gloves, sunlight, moving
+       vehicle) without inflating the visual weight of these secondary pills —
+       44px matches the WCAG/mobile minimum touch target, same as the sticky
+       action bar buttons below. */
+    @apply inline-flex min-h-[2.75rem] items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40;
+    border: 1px solid var(--line);
+    background: var(--bg-surface);
+    color: var(--text);
+  }
+
+  .chip-button:hover:not(:disabled) {
+    background: var(--bg-card);
+  }
+
+  .chip-button.is-active {
+    border-color: var(--gold);
+    color: var(--gold);
+  }
+
+  /* Sticky bottom action bar so the tester never has to scroll to reach
+     Mark unclear / Next prompt / Finish & review. Bleeds to the edges of
+     the mobile card (cancels the page's own horizontal padding). */
+  .sticky-action-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    margin: 0 -1rem;
+    padding: 0.65rem 1rem calc(0.65rem + env(safe-area-inset-bottom));
+    background: var(--bg-ink);
+    border-top: 1px solid var(--line);
   }
 
   .warning-card {
@@ -324,5 +455,51 @@ textarea:focus-visible {
     border-color: var(--gold);
     background: var(--gold);
     color: var(--gold-ink);
+  }
+}
+
+/* Recording-screen swipe gesture reliability: `touch-action` and
+   `user-select` are NOT inherited by descendants, so setting them only on
+   the swipe wrapper itself (see RecordingScreen.tsx's "swipe-card" div)
+   left inner elements — the prompt text, tester instruction, English gloss,
+   "Play aloud" button — free to fall back to the browser's own default
+   touch handling. On a real device that meant a drag starting on one of
+   those elements could be claimed by native text-selection/callout or
+   panning before ever reaching the pointer handlers, which is exactly why
+   the swipe worked inconsistently depending on where the gesture started.
+   The universal descendant selector closes that gap without touching any
+   element's click/tap behaviour. */
+.swipe-card,
+.swipe-card * {
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Compact mode for short phones (e.g. 320×568, 360×640): tighter card
+   padding and slightly smaller prompt text, so the one-screen workflow
+   layouts fit without the content column needing its fallback scroll.
+   Labels/text never drop below readable sizes. */
+@media (max-height: 700px) {
+  .prompt-card-compact {
+    padding: 0.5rem 0.65rem;
+  }
+
+  .text-prompt {
+    font-size: clamp(0.9rem, 3.2vw, 1rem);
+  }
+
+  .field-card,
+  .field-card-soft {
+    padding: 0.65rem 0.75rem;
+  }
+
+  /* QC review's "open the record first" hint is helpful but not essential —
+     the button labels already say what to do. On short viewports (320x568)
+     the shell clips rather than scrolls, so this line was getting cut off
+     mid-word instead of wrapping; drop it here to keep the visible text whole. */
+  .qc-review-hint {
+    display: none;
   }
 }

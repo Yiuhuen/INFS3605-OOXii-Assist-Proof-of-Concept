@@ -1,9 +1,17 @@
 {
-  "name": "OOXii Assist PoC",
-  "short_name": "OOXii Assist",
+  "name": "OOXii Assist",
+  "short_name": "OOXii",
+  "description": "Offline-first multilingual guided testing companion for OOXii lay testers.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#17081f",
-  "theme_color": "#251033",
-  "description": "Offline-first multilingual guided testing companion."
+  "background_color": "#150c1f",
+  "theme_color": "#150c1f",
+  "icons": [
+    {
+      "src": "/brand/ooxii-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }

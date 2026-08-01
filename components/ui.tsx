@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ButtonHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
-import { ChevronDown, Globe, Wifi, WifiOff } from "lucide-react";
+import { ChevronDown, ChevronRight, Globe, Wifi, WifiOff, X } from "lucide-react";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   icon?: ReactNode;
@@ -66,6 +66,27 @@ export function StatusBadge({ label, tone = "neutral", icon }: { label: string; 
   );
 }
 
+export type StatusDotTone = "neutral" | "good" | "warn" | "danger" | "muted";
+
+const statusDotToneClass: Record<StatusDotTone, string> = {
+  neutral: "",
+  good: "is-good",
+  warn: "is-warn",
+  danger: "is-danger",
+  muted: "is-muted"
+};
+
+/**
+ * Calm status indicator for workflow rows: a small coloured dot plus
+ * sentence-case text — the default replacement for StatusBadge in
+ * field/issue/status rows so screens read as a tool, not a badge wall.
+ * One per row, closed vocabulary (Captured / Missing / Check / Edited /
+ * Reviewed / Needs QC / Saved locally / Ready for export / Pending sync).
+ */
+export function StatusDot({ label, tone = "neutral", className = "" }: { label: string; tone?: StatusDotTone; className?: string }) {
+  return <span className={`status-dot ${statusDotToneClass[tone]} ${className}`}>{label}</span>;
+}
+
 /** Fixed brand colours regardless of contrast theme: right eye = blue, left eye = light/white. Renders bare badges — wrap in a flex container. */
 export function StepBadges({ stepId, languageName }: { stepId: string; languageName: string }) {
   return (
@@ -91,16 +112,6 @@ export function OfflineBadge({ isOnline }: { isOnline: boolean }) {
   );
 }
 
-export function MetricCard({ value, label, tone = "neutral" }: { value: string | number; label: string; tone?: "neutral" | "gold" | "danger" }) {
-  const valueClass = tone === "gold" ? "text-[var(--gold)]" : tone === "danger" ? "text-[var(--danger)]" : "text-white";
-  return (
-    <div className="rounded-2xl border border-field-line bg-field-card px-3 py-4 text-center">
-      <p className={`text-2xl font-black ${valueClass}`}>{value}</p>
-      <p className="mt-1 text-xs text-field-muted">{label}</p>
-    </div>
-  );
-}
-
 export function ActionCard({ icon, label, badge, onClick }: { icon: ReactNode; label: string; badge?: number; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} className="action-card">
@@ -115,6 +126,7 @@ export function PromptCard({
   eyebrow,
   prompt,
   englishGloss,
+  icon,
   onPlay,
   speechAvailable,
   variant = "active"
@@ -122,6 +134,8 @@ export function PromptCard({
   eyebrow: string;
   prompt: string;
   englishGloss?: string;
+  /** Simple emoji shown next to the eyebrow, e.g. a step icon from the prompt data. */
+  icon?: string;
   onPlay: () => void;
   speechAvailable: boolean;
   /** "active" = gold hero card for the recording screen; "preview" = subdued card for the guided-prompt screen. */
@@ -130,7 +144,10 @@ export function PromptCard({
   const isActive = variant === "active";
   return (
     <div className={isActive ? "prompt-card" : "prompt-card-preview"}>
-      <p className={`text-xs font-bold uppercase tracking-wide ${isActive ? "text-[var(--gold)]" : "text-field-muted"}`}>{eyebrow}</p>
+      <div className="flex items-center gap-2">
+        {icon && <span className="text-xl leading-none">{icon}</span>}
+        <p className={`text-xs font-bold ${isActive ? "text-[var(--gold)]" : "text-field-muted"}`}>{eyebrow}</p>
+      </div>
       <p className="mt-2 text-2xl font-black leading-snug">&ldquo;{prompt}&rdquo;</p>
       {englishGloss && (
         <>
@@ -147,8 +164,72 @@ export function PromptCard({
           Play prompt aloud
         </SecondaryButton>
       )}
-      {!speechAvailable && (
+      {speechAvailable ? (
+        <p className="mt-2 text-sm opacity-60">Use this if you prefer the app to speak the instruction for the client.</p>
+      ) : (
         <p className="mt-2 text-sm opacity-70">Audio playback is not available on this device. Please read the prompt aloud.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Collapsible transcript tab — the one shared pattern for "transcript is
+ * supporting evidence, not the main workflow". Collapsed by default: title,
+ * a one-line status subtitle ("3 lines captured" / "Listening…"), the latest
+ * line as a 2-line preview, and a chevron. Expanded: the caller's content in
+ * an internally-scrolling panel capped by maxHeightClass, plus an explicit
+ * "Collapse transcript" button — the page around it never becomes a long
+ * transcript scroll. Purely presentational: expansion state lives in the
+ * caller and touches nothing else (recording, timer, STT, fields).
+ */
+export function TranscriptTab({
+  title = "Transcript",
+  subtitle,
+  collapsedPreview,
+  expanded,
+  onToggle,
+  maxHeightClass = "max-h-48",
+  children
+}: {
+  title?: string;
+  subtitle: string;
+  /** Latest-line teaser shown while collapsed — keep to 1–2 clamped lines. */
+  collapsedPreview?: ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  /** Height cap for the expanded inner scroll area so the transcript never takes over the screen. */
+  maxHeightClass?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-field-line bg-field-card">
+      <button
+        type="button"
+        className="flex min-h-[2.75rem] w-full items-center justify-between gap-2 px-3 py-2 text-left"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-label={expanded ? "Collapse transcript" : "Expand transcript"}
+      >
+        <span className="min-w-0">
+          <span className="block text-sm font-bold leading-snug">{title}</span>
+          <span className="block truncate text-[11px] opacity-60">{subtitle}</span>
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 transition ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {!expanded && collapsedPreview && <div className="px-3 pb-2">{collapsedPreview}</div>}
+      {expanded && (
+        <div className="border-t border-field-line px-3 py-2">
+          <div className={`${maxHeightClass} overflow-y-auto`}>{children}</div>
+          <button
+            type="button"
+            className="mt-2 flex min-h-[2.25rem] w-full items-center justify-center gap-1 rounded-lg border border-field-line bg-field-surface text-xs font-bold transition hover:bg-field-card"
+            onClick={onToggle}
+          >
+            Collapse transcript
+            <ChevronDown className="h-3.5 w-3.5 rotate-180" />
+          </button>
+        </div>
       )}
     </div>
   );
@@ -163,16 +244,6 @@ export function Disclosure({ label, children, defaultOpen = false }: { label: st
         <ChevronDown className={`h-4 w-4 shrink-0 transition ${open ? "rotate-180" : ""}`} />
       </button>
       {open && <div className="pb-3 text-sm opacity-80">{children}</div>}
-    </div>
-  );
-}
-
-export function SectionDivider({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-3 py-1">
-      <div className="h-px flex-1 bg-field-line" />
-      <span className="text-xs font-bold uppercase tracking-wide text-field-muted">{label}</span>
-      <div className="h-px flex-1 bg-field-line" />
     </div>
   );
 }
@@ -209,12 +280,13 @@ export function SelectField({
 export function TextAreaField({
   label,
   className = "",
+  hideLabel = false,
   ...props
-}: { label: string } & TextareaHTMLAttributes<HTMLTextAreaElement>) {
+}: { label: string; hideLabel?: boolean } & TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <label className={`block ${className}`}>
-      <span className="field-label">{label}</span>
-      <textarea className="field-input" {...props} />
+      {!hideLabel && <span className="field-label">{label}</span>}
+      <textarea className="field-input" aria-label={hideLabel ? label : undefined} {...props} />
     </label>
   );
 }
@@ -248,6 +320,91 @@ export function CheckboxCard({
   );
 }
 
+/** Generic fixed-overlay confirmation dialog — stacked full-width buttons so the confirm label never has to shrink/wrap on a narrow phone screen. */
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  cancelLabel = "Cancel",
+  onConfirm,
+  onCancel
+}: {
+  open: boolean;
+  title: string;
+  body: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
+      style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-field-line bg-field-card p-4 shadow-xl">
+        <p className="text-base font-black">{title}</p>
+        <p className="mt-2 text-sm opacity-80">{body}</p>
+        <div className="mt-4 space-y-2">
+          <SecondaryButton fullWidth onClick={onCancel}>
+            {cancelLabel}
+          </SecondaryButton>
+          <DangerButton fullWidth onClick={onConfirm}>
+            {confirmLabel}
+          </DangerButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The one legitimate place a one-screen workflow screen is allowed to
+ * scroll: a full-detail expand (full transcript, full record list, full
+ * field evidence) that the default collapsed view only shows a preview or
+ * count of. Closed by default; opening it never affects the page behind it,
+ * since it's a fixed overlay with its own internal `overflow-y-auto`.
+ */
+export function DetailModal({
+  open,
+  title,
+  onClose,
+  children
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
+      style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-field-line bg-field-card shadow-xl sm:max-w-lg">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-field-line px-4 py-3">
+          <p className="text-base font-black">{title}</p>
+          <button
+            aria-label="Close"
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-field-line bg-field-surface transition hover:bg-field-card"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 export function WarningCard({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
   return (
     <div className="warning-card">
@@ -272,5 +429,40 @@ export function EmptyState({ title, detail }: { title: string; detail?: string }
       <p className="font-bold">{title}</p>
       {detail && <p className="mt-1 text-sm opacity-70">{detail}</p>}
     </div>
+  );
+}
+
+/** Full-width compact list row for secondary screens (e.g. the More screen) — icon, label, optional badge/detail, chevron. Deliberately not a grid of cards. */
+export function ListRow({
+  icon,
+  label,
+  detail,
+  badge,
+  onClick
+}: {
+  icon: ReactNode;
+  label: string;
+  detail?: string;
+  badge?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded-xl border border-field-line bg-field-card px-4 py-3.5 text-left transition hover:bg-field-surface"
+    >
+      <span className="text-field-muted">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-bold leading-snug">{label}</span>
+        {detail && <span className="block text-xs opacity-60">{detail}</span>}
+      </span>
+      {Boolean(badge) && (
+        <span className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-bold text-white" style={{ background: "var(--record)" }}>
+          {badge}
+        </span>
+      )}
+      <ChevronRight className="h-4 w-4 shrink-0 text-field-muted" />
+    </button>
   );
 }
