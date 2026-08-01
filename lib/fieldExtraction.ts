@@ -38,6 +38,7 @@ const GLASSES_STEP_ID = "glasses-check";
 export const FIELD_DISPLAY_LABELS: Record<keyof ManualExtractedFields, string> = {
   right_eye_distance_result: "Right eye distance result",
   left_eye_distance_result: "Left eye distance result",
+  both_eyes_line: "Both eyes line",
   final_readable_line: "Final readable line",
   // "/ dispensed" disambiguates from current_glasses ("does the client
   // already have glasses?") — the two were repeatedly confused when both
@@ -479,6 +480,30 @@ function matchFinalReadableLine(wholeText: string): FieldMatch {
   return { value: "", matchLevel: "none" };
 }
 
+const BOTH_EYES_LINE_PATTERNS = [
+  new RegExp(`\\bboth\\s+eyes\\b[^.\\n]{0,25}?\\b(?:read|see)\\b[^.\\n]{0,10}?\\bline\\s+(\\d+|${NUMBER_WORD_ALTERNATION})\\b`, "i"),
+  new RegExp(`\\b(?:with|using)\\s+both\\s+eyes\\b[^.\\n]{0,15}?\\bline\\s+(\\d+|${NUMBER_WORD_ALTERNATION})\\b`, "i"),
+  new RegExp(`\\bboth\\s+eyes\\s+line\\s+(\\d+|${NUMBER_WORD_ALTERNATION})\\b`, "i")
+];
+
+/**
+ * Unaided both-eyes line (mirrors OOXii's pretest.bothEyes.ooxiiLine).
+ * Optional and never high-risk — an unmentioned both-eyes line is a normal
+ * state (the fixed prompt sequence has no both-eyes step), so "none" here
+ * just reads "Not recorded" in exports, never Missing. Deliberately excludes
+ * the short-sighted module's own "short-sighted both eyes line X" phrasing —
+ * that belongs to short_sighted_both_eyes_result, not this field.
+ */
+function matchBothEyesLine(wholeText: string): FieldMatch {
+  for (const pattern of BOTH_EYES_LINE_PATTERNS) {
+    const match = pattern.exec(wholeText);
+    if (match && !/short[- ]sighted[^.\n]{0,30}$/i.test(wholeText.slice(0, match.index))) {
+      return { value: `Line ${parseLineNumber(match[1])}`, matchLevel: "whole", evidence: match[0].trim() };
+    }
+  }
+  return { value: "", matchLevel: "none" };
+}
+
 const DIOPTER_WORD_ALT = Object.keys(NUMBER_WORDS).join("|");
 
 /** Pads a single digit ("5" -> "50") but leaves an already-two-digit fraction ("00") alone — a raw ".00"/".50" capture must never gain a spurious third zero. */
@@ -820,6 +845,7 @@ export function extractFieldsFromTranscript(input: {
   const cataractMatch = matchPolarityField(CATARACT_HISTORY_RULE, "", lowerWhole);
   const comfortMatch = matchPolarityField(COMFORT_RULE, glassesStepText, lowerWhole);
   const finalLineMatch = matchFinalReadableLine(lowerWhole);
+  const bothEyesLineMatch = matchBothEyesLine(lowerWhole);
   const glassesSelectedMatch = matchGlassesSelected(glassesStepText, lowerWhole);
 
   const rightLensMatch = matchSidedLensSelected("right", glassesStepText, lowerWhole);
@@ -878,6 +904,7 @@ export function extractFieldsFromTranscript(input: {
       comfortAffected ? "high" : overallRisk,
       sourceKind
     ),
+    both_eyes_line: finalizeField("both_eyes_line", bothEyesLineMatch, overallRisk, sourceKind),
     final_readable_line: finalizeField("final_readable_line", finalLineMatch, overallRisk, sourceKind),
     glasses_selected: finalizeField(
       "glasses_selected",
