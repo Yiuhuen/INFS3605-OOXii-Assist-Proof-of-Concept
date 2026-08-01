@@ -95,12 +95,13 @@ const NON_SWIPE_CONTROL_SELECTOR = "input, textarea, select, audio, video, [cont
  * iOS Safari, and desktop drag without separate touch/mouse handlers.
  *
  * A gesture starting on a real form/media control never begins tracking, so
- * it can't hijack a text-field drag or a range slider. The recording screen
- * no longer scrolls vertically at all (OneScreenShell), so there's no
- * competing vertical gesture to guard against here anymore — this hook only
- * ever reacts to horizontal movement, and leaves anything that stays
- * vertical/diagonal alone so native `touch-action: pan-y` scrolling (where
- * applicable) is never fought.
+ * it can't hijack a text-field drag or a range slider. The content column
+ * fits without scrolling on most viewports (OneScreenShell), but keeps
+ * `overflow-y-auto` as a fallback for short/narrow phones and expanded
+ * panels — so a genuine vertical drag over this card is still possible and
+ * must keep working. This hook only ever reacts to horizontal movement and
+ * leaves anything that stays vertical/diagonal alone, so that fallback
+ * scroll and native `touch-action: pan-y` panning are never fought.
  */
 function useSwipeCard({
   onSwipeLeft,
@@ -148,20 +149,27 @@ function useSwipeCard({
     const dx = event.clientX - gesture.startX;
     const dy = event.clientY - gesture.startY;
     if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_START_PX) return;
-    // Only follow the drag visually once the gesture is clearly horizontal —
-    // a vertical scroll never nudges the card sideways, and never gets stuck
-    // half-dragged since dragX only updates on genuinely horizontal moves.
+    // Capture as soon as the gesture has moved at all (any direction), not
+    // only once it's confirmed horizontal. A real swipe rarely starts
+    // perfectly horizontal — the first few px are often ambiguous or even
+    // vertical-leaning before straightening out — and without capture here,
+    // a finger that drifts off the card during that ambiguous window (easy
+    // on a real phone) stops delivering pointermove/up to this element
+    // entirely, silently dropping what the user experiences as a normal
+    // swipe. Capturing on any confirmed movement (not a plain tap, which
+    // never reaches this threshold) closes that gap while still leaving taps
+    // on inner buttons untouched — see the onPointerDown comment for why
+    // capture isn't taken any earlier than this.
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Unsupported in this environment — gesture still works, just less robust to drift.
+    }
+    // Only follow the drag visually — and only count it as a swipe on
+    // pointerup — once the gesture is clearly horizontal. A vertical scroll
+    // never nudges the card sideways, and never gets stuck half-dragged
+    // since dragX only updates on genuinely horizontal moves.
     if (Math.abs(dx) > Math.abs(dy) * HORIZONTAL_DOMINANCE_RATIO) {
-      // First confirmed-horizontal move of this gesture: capture now, so a
-      // finger that later drifts off the card (very easy on a real phone)
-      // keeps delivering pointermove/up to this element instead of the
-      // gesture silently dying — see the onPointerDown comment for why this
-      // is deferred rather than done immediately on pointerdown.
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {
-        // Unsupported in this environment — gesture still works, just less robust to drift.
-      }
       setDragging(true);
       setDragX(Math.max(-SWIPE_DRAG_CLAMP_PX, Math.min(SWIPE_DRAG_CLAMP_PX, dx)));
     }
@@ -1157,6 +1165,19 @@ export function RecordingScreen({
             "swipe-card" (see globals.css) is what actually makes the gesture reliable from every inner element — touch-action/user-select don't inherit to descendants, so without it a drag starting on the prompt text or "Play aloud" button could be claimed by the browser's own text-selection/callout/panning instead of reaching these pointer handlers. */}
         <div
           {...swipeHandlers}
+          // Capture-phase backstop: guardedClick() on "Play aloud" already
+          // handles the one button inside this card today, but this catches
+          // any click reaching the card while suppressNextClickRef is still
+          // set (e.g. a future inner control that forgets to wrap itself),
+          // so a stray click can never fire navigation or actions right
+          // after a real swipe just because a new element was added here.
+          onClickCapture={(event) => {
+            if (suppressNextClickRef.current) {
+              suppressNextClickRef.current = false;
+              event.stopPropagation();
+              event.preventDefault();
+            }
+          }}
           className="swipe-card shrink-0 cursor-grab select-none active:cursor-grabbing"
           style={{ touchAction: "pan-y", transform: `translateX(${dragX}px)`, transition: dragging ? "none" : "transform 200ms ease" }}
         >
