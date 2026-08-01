@@ -3,24 +3,18 @@
 import { useMemo, useState } from "react";
 import { Check, Download, ShieldCheck } from "lucide-react";
 import type { TestRecord } from "@/lib/types";
-import { AUDIT_CSV_COLUMNS, LONGLIST_CSV_COLUMNS, buildFullAuditLonglist, buildOoxiiDataLonglist } from "@/lib/csv";
+import { AUDIT_CSV_COLUMNS, LONGLIST_CSV_COLUMNS, buildFullAuditLonglist, buildOoxiiDataLonglist, readableColumn } from "@/lib/csv";
+import type { XlsxDeliveryOutcome } from "@/lib/xlsx";
 import { recordNeedsQc } from "@/lib/qc";
 import { DangerButton, DetailModal, PrimaryButton, SecondaryButton, WarningCard } from "@/components/ui";
 import { OneScreenShell, CompactHeader, BottomActionBar } from "@/components/layout/OneScreenShell";
 
-/** "id"/"qc" are acronyms and stay fully uppercase; only the first word is otherwise capitalised (sentence case) — matches column names used elsewhere in the app. */
-const ACRONYM_WORDS = new Set(["id", "qc"]);
-
-function readableColumn(column: string) {
-  return column
-    .split("_")
-    .map((word, index) => {
-      const lower = word.toLowerCase();
-      if (ACRONYM_WORDS.has(lower)) return lower.toUpperCase();
-      return index === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower;
-    })
-    .join(" ");
-}
+/** Copy shown under the Excel export button after a tap resolves — mirrors the exact delivery outcome from lib/xlsx.ts's shareOrDownloadXlsxFile, never a raw error. */
+const LONGLIST_EXPORT_MESSAGES: Record<XlsxDeliveryOutcome, string> = {
+  shared: "OOXii Data Longlist exported as Excel.",
+  downloaded: "Excel file created. If it does not open automatically, check Downloads or Files on your phone.",
+  blocked: "Your browser blocked automatic opening. Use the downloaded .xlsx file from Files or Downloads."
+};
 
 function FieldChecklist({ fields }: { fields: readonly string[] }) {
   return (
@@ -108,6 +102,7 @@ export function ExportScreen({
   isOnline,
   hasDemoRecords,
   onExportLonglist,
+  onExportLonglistCsv,
   onExportAudit,
   onLoadSampleRecords,
   onClearSampleRecords,
@@ -118,7 +113,8 @@ export function ExportScreen({
   records: TestRecord[];
   isOnline: boolean;
   hasDemoRecords: boolean;
-  onExportLonglist: () => void;
+  onExportLonglist: () => Promise<XlsxDeliveryOutcome>;
+  onExportLonglistCsv: () => void;
   onExportAudit: () => void;
   onLoadSampleRecords: () => void;
   onClearSampleRecords: () => void;
@@ -134,6 +130,9 @@ export function ExportScreen({
   const [previewMode, setPreviewMode] = useState<"data" | "audit">("data");
   /** Set only when a download actually fires this session — never pre-filled, so "Not yet generated" is honest until a real export happens. */
   const [lastGeneratedAt, setLastGeneratedAt] = useState<string | null>(null);
+  /** Result copy for the last Excel export tap — shared/downloaded/blocked, see LONGLIST_EXPORT_MESSAGES. Cleared on a fresh screen visit, not persisted. */
+  const [longlistExportMessage, setLonglistExportMessage] = useState<string | null>(null);
+  const [exportingLonglist, setExportingLonglist] = useState(false);
 
   const dataPreview = useMemo(() => {
     const table = buildOoxiiDataLonglist(records.slice(0, 6));
@@ -176,9 +175,16 @@ export function ExportScreen({
     setLastGeneratedAt(new Date().toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }));
   }
 
-  function handleExportLonglist() {
-    onExportLonglist();
-    stampGenerated();
+  /** Generates and shares/downloads the real .xlsx directly from this tap — see lib/xlsx.ts. Only the delivery outcome is caught into a friendly message here; a thrown privacy-guard violation is left to propagate so it fails loudly in development instead of being hidden behind "blocked". */
+  async function handleExportLonglist() {
+    setExportingLonglist(true);
+    try {
+      const outcome = await onExportLonglist();
+      setLonglistExportMessage(LONGLIST_EXPORT_MESSAGES[outcome]);
+      stampGenerated();
+    } finally {
+      setExportingLonglist(false);
+    }
   }
 
   function handleExportAudit() {
@@ -278,11 +284,28 @@ export function ExportScreen({
               </button>
             </div>
             <p className="mt-1 text-xs leading-snug opacity-70">
-              One row per test record. Summarises captured values, right/left lens data, optional test status, QC status and export readiness.
+              Downloads an Excel spreadsheet (.xlsx) with one row per test record. Summarises captured values, right/left lens data, optional test status, QC
+              status and export readiness.
             </p>
-            <PrimaryButton fullWidth className="mt-2 py-2 text-sm" icon={<Download className="h-4 w-4" />} disabled={records.length === 0} onClick={handleExportLonglist}>
+            <PrimaryButton
+              fullWidth
+              className="mt-2 py-2 text-sm"
+              icon={<Download className="h-4 w-4" />}
+              disabled={records.length === 0 || exportingLonglist}
+              onClick={handleExportLonglist}
+            >
               Export OOXii Data Longlist
             </PrimaryButton>
+            <div className="mt-1.5 flex items-center justify-between gap-2">
+              <p className="text-xs leading-snug opacity-70">{longlistExportMessage ?? " "}</p>
+              <button
+                className="shrink-0 text-xs font-bold text-[var(--gold)] underline-offset-2 hover:underline disabled:opacity-40 disabled:no-underline"
+                disabled={records.length === 0}
+                onClick={onExportLonglistCsv}
+              >
+                Export as CSV
+              </button>
+            </div>
           </div>
 
           <div className="field-card shrink-0">

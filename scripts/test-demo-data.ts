@@ -31,10 +31,18 @@ import {
   recordsToLonglistCsv
 } from "../lib/csv";
 import type { LonglistTable } from "../lib/csv";
+import {
+  OOXII_DATA_LONGLIST_SHEET_NAME,
+  XLSX_MIME_TYPE,
+  buildOoxiiDataLonglistRows,
+  buildXlsxFile,
+  exportOoxiiDataLonglistXlsx,
+  ooxiiDataLonglistFilename
+} from "../lib/xlsx";
 
 interface Case {
   name: string;
-  run: () => string | null; // null = pass, string = failure reason
+  run: () => string | null | Promise<string | null>; // null = pass, string = failure reason
 }
 
 const cases: Case[] = [];
@@ -400,19 +408,129 @@ cases.push({
   }
 });
 
-let passCount = 0;
-let failCount = 0;
+/* ---------------------------------------------------------------------------
+ * XLSX export — lib/xlsx.ts. Same underlying records/columns as the CSV
+ * longlist above; these cases cover the spreadsheet-specific surface:
+ * workbook/worksheet shape, readable headers, optional-test display cells,
+ * the privacy guard on the XLSX path, and the mobile file-delivery helper.
+ * ------------------------------------------------------------------------- */
 
-for (const testCase of cases) {
-  const failure = testCase.run();
-  if (failure === null) {
-    passCount += 1;
-    console.log(`PASS: ${testCase.name}`);
-  } else {
-    failCount += 1;
-    console.error(`FAIL: ${testCase.name}\n  ${failure}`);
+// XLSX Test 1 — workbook shape: one worksheet, correct name, header + 6 record rows.
+cases.push({
+  name: "XLSX 1. Workbook has one worksheet named 'OOXii Data Longlist' with header + 6 record rows",
+  run: async () => {
+    const workbook = await exportOoxiiDataLonglistXlsx(seedDemoRecords());
+    const sheet = workbook.getWorksheet(OOXII_DATA_LONGLIST_SHEET_NAME);
+    if (!sheet) return `expected a worksheet named "${OOXII_DATA_LONGLIST_SHEET_NAME}"`;
+    return (
+      expectEqual("worksheet count", workbook.worksheets.length, 1) ??
+      expectEqual("worksheet name", sheet.name, OOXII_DATA_LONGLIST_SHEET_NAME) ??
+      expectEqual("row count (header + 6 records)", sheet.rowCount, 7) ??
+      expectEqual("header row frozen", sheet.views?.[0]?.state, "frozen") ??
+      expectTrue("auto-filter set on the header row", Boolean(sheet.autoFilter))
+    );
   }
+});
+
+// XLSX Test 2 — readable headers cover right/left lens, astigmatism, optional short-sighted and QC/export fields.
+cases.push({
+  name: "XLSX 2. Readable headers cover lens/astigmatism/short-sighted/QC/export fields",
+  run: () => {
+    const { headers } = buildOoxiiDataLonglistRows(seedDemoRecords());
+    const required = [
+      "Right lens selected",
+      "Left lens selected",
+      "Right astigmatism",
+      "Right toric power",
+      "Right axis",
+      "Left astigmatism",
+      "Left toric power",
+      "Left axis",
+      "Short sighted test performed",
+      "Short sighted right result",
+      "Short sighted left result",
+      "Short sighted both eyes result",
+      "QC required",
+      "Export ready"
+    ];
+    const missing = required.filter((header) => !headers.includes(header));
+    return missing.length === 0 ? null : `missing readable header(s): ${missing.join(", ")}`;
+  }
+});
+
+// XLSX Test 3 — optional short-sighted module explicitly not performed reads "Not tested" in the spreadsheet cells, never blank.
+cases.push({
+  name: "XLSX 3. Short-sighted-not-performed (C-489T) cells read 'Not tested', not blank",
+  run: () => {
+    const { headers, rows } = buildOoxiiDataLonglistRows(seedDemoRecords());
+    const clientCol = headers.indexOf("Client ID");
+    const row = rows.find((r) => r[clientCol] === "C-489T");
+    if (!row) return "fixture error: no XLSX row for C-489T";
+    const cell = (header: string) => row[headers.indexOf(header)];
+    return (
+      expectEqual("Short sighted test performed", cell("Short sighted test performed"), "No") ??
+      expectEqual("Short sighted right result", cell("Short sighted right result"), "Not tested") ??
+      expectEqual("Short sighted left result", cell("Short sighted left result"), "Not tested") ??
+      expectEqual("Short sighted both eyes result", cell("Short sighted both eyes result"), "Not tested") ??
+      expectEqual("Short sighted notes status", cell("Short sighted notes status"), "Not tested")
+    );
+  }
+});
+
+// XLSX Test 4 — privacy guard covers the XLSX header path too, and still throws on a forbidden column.
+cases.push({
+  name: "XLSX 4. Privacy guard covers XLSX headers and throws on forbidden columns",
+  run: () => {
+    // buildOoxiiDataLonglistRows must not throw for the real (clean) column list...
+    try {
+      buildOoxiiDataLonglistRows(seedDemoRecords());
+    } catch (error) {
+      return `expected the real XLSX column list to pass the privacy guard, got: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    // ...but assertNoPersonalFields (the same guard the XLSX builder calls) must still throw for a forbidden column.
+    try {
+      assertNoPersonalFields(["record_id", "phone_number"]);
+      return "expected assertNoPersonalFields to throw for phone_number";
+    } catch {
+      // expected
+    }
+    return null;
+  }
+});
+
+// XLSX Test 5 — the mobile export helper produces a real .xlsx File with the correct name and MIME type.
+cases.push({
+  name: "XLSX 5. Mobile export helper produces a .xlsx File with the correct MIME type",
+  run: async () => {
+    const workbook = await exportOoxiiDataLonglistXlsx(seedDemoRecords());
+    const filename = ooxiiDataLonglistFilename(new Date("2026-08-02T00:00:00Z"));
+    const file = await buildXlsxFile(workbook, filename);
+    return (
+      expectEqual("filename", file.name, "ooxii-data-longlist-2026-08-02.xlsx") ??
+      expectTrue("filename ends in .xlsx", file.name.endsWith(".xlsx")) ??
+      expectEqual("MIME type", file.type, XLSX_MIME_TYPE) ??
+      expectTrue("file has real content", file.size > 0)
+    );
+  }
+});
+
+async function main() {
+  let passCount = 0;
+  let failCount = 0;
+
+  for (const testCase of cases) {
+    const failure = await testCase.run();
+    if (failure === null) {
+      passCount += 1;
+      console.log(`PASS: ${testCase.name}`);
+    } else {
+      failCount += 1;
+      console.error(`FAIL: ${testCase.name}\n  ${failure}`);
+    }
+  }
+
+  console.log(`\n${passCount} passed, ${failCount} failed (of ${cases.length})`);
+  if (failCount > 0) process.exit(1);
 }
 
-console.log(`\n${passCount} passed, ${failCount} failed (of ${cases.length})`);
-if (failCount > 0) process.exit(1);
+main();

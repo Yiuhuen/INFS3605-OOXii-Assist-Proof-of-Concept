@@ -34,6 +34,20 @@ function escapeCsv(value: unknown) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
+/** "id"/"qc" are acronyms and stay fully uppercase; only the first word is otherwise capitalised (sentence case). Shared by the on-screen field checklists (ExportScreen) and the XLSX column headers (lib/xlsx.ts) so both never disagree. */
+const ACRONYM_WORDS = new Set(["id", "qc"]);
+
+export function readableColumn(column: string) {
+  return column
+    .split("_")
+    .map((word, index) => {
+      const lower = word.toLowerCase();
+      if (ACRONYM_WORDS.has(lower)) return lower.toUpperCase();
+      return index === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower;
+    })
+    .join(" ");
+}
+
 /** Exact column-name denylist for personal/identifying data — shared with scripts/test-demo-data.ts. Deliberately exact-match, not substring: legitimate metadata columns like "field_name" must never false-positive on "name". */
 export const FORBIDDEN_EXPORT_COLUMNS: ReadonlySet<string> = new Set([
   "name",

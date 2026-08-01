@@ -17,6 +17,7 @@ import { InsightsScreen } from "@/components/screens/InsightsScreen";
 import { AdminScreen } from "@/components/screens/AdminScreen";
 import { SettingsScreen } from "@/components/screens/SettingsScreen";
 import { recordsToLonglistCsv, recordsToAuditCsv, downloadCsv } from "@/lib/csv";
+import { buildXlsxFile, exportOoxiiDataLonglistXlsx, ooxiiDataLonglistFilename, shareOrDownloadXlsxFile, type XlsxDeliveryOutcome } from "@/lib/xlsx";
 import { getFallbackPack } from "@/lib/languagePacks";
 import { generateClientId, generateMarkerId, generateRecordId, generateSegmentId } from "@/lib/ids";
 import { extractFieldsFromTranscript } from "@/lib/fieldExtraction";
@@ -1831,7 +1832,15 @@ export default function Home() {
     }
   }
 
-  function handleExportLonglist() {
+  /** Builds the real .xlsx workbook and fires the mobile share/download flow directly from the button tap — see lib/xlsx.ts. Never swallows a privacy-guard failure: only the delivery step (share/download) is allowed to fail soft into "blocked". */
+  async function handleExportLonglist(): Promise<XlsxDeliveryOutcome> {
+    const workbook = await exportOoxiiDataLonglistXlsx(records);
+    const file = await buildXlsxFile(workbook, ooxiiDataLonglistFilename());
+    return shareOrDownloadXlsxFile(file);
+  }
+
+  /** CSV stays available as a secondary export for anyone who specifically wants the raw text file. */
+  function handleExportLonglistCsv() {
     const csv = recordsToLonglistCsv(records);
     downloadCsv(`ooxii-assist-longlist-${new Date().toISOString().slice(0, 10)}.csv`, csv);
   }
@@ -2143,6 +2152,7 @@ export default function Home() {
           isOnline={isOnline}
           hasDemoRecords={records.some((record) => record.demo_record)}
           onExportLonglist={handleExportLonglist}
+          onExportLonglistCsv={handleExportLonglistCsv}
           onExportAudit={handleExportAudit}
           onLoadSampleRecords={loadDemoData}
           onClearSampleRecords={clearDemoDataOnly}
