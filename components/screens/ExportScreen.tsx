@@ -435,7 +435,7 @@ export function ExportScreen({
       <DetailModal open={fieldsModal === "audit"} title={`Full Audit Longlist fields (${AUDIT_CSV_COLUMNS.length})`} onClose={() => setFieldsModal(null)}>
         <div className="space-y-4">
           <p className="text-xs opacity-70">
-            One row per saved record <span className="font-bold">per field</span> — 6 records with 22 tracked fields produce 132 rows, not 6.
+            One row per saved record <span className="font-bold">per field</span> — 20 sample records with 22 tracked fields produce 440 rows, not 20.
           </p>
           {AUDIT_FIELD_GROUPS.map((group) => (
             <div key={group.title}>

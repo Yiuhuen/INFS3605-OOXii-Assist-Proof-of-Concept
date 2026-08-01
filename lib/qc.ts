@@ -710,9 +710,10 @@ export function exportQcStatus(record: TestRecord): ExportQcStatus {
 const SUMMARY_FIELD_LABELS: Partial<Record<keyof ManualExtractedFields, string>> = {
   right_eye_distance_result: "right eye result",
   left_eye_distance_result: "left eye result",
-  final_readable_line: "final readable line"
+  final_readable_line: "final readable line",
+  comfort_response: "comfort response"
 };
-const SUMMARY_FIELD_ORDER: Array<keyof ManualExtractedFields> = ["right_eye_distance_result", "left_eye_distance_result", "final_readable_line"];
+const SUMMARY_FIELD_ORDER: Array<keyof ManualExtractedFields> = ["right_eye_distance_result", "left_eye_distance_result", "final_readable_line", "comfort_response"];
 
 /**
  * Short, curated, operator-facing summary sentence for the OOXii Data
@@ -733,6 +734,7 @@ export function qcReasonSummary(record: TestRecord): string {
   const fieldConfidence = effective.field_confidence;
   const parts: string[] = [];
 
+  if (record.sync_status === "Failed") parts.push("sync attempt failed");
   if (usedManualOverride(record)) parts.push("manual recording override");
   if (record.has_unvisited_prompts) parts.push("prompt coverage incomplete");
   if (!record.has_unvisited_prompts && (isLowConfidence(record) || record.transcript_quality_risk !== "low")) {

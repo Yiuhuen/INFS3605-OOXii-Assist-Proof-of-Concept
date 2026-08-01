@@ -81,34 +81,34 @@ function auditRow(table: LonglistTable, clientId: string, fieldName: string) {
   return (name: string) => row[col(table, name)];
 }
 
-// A. Exactly 6 sample records — one per presentation case — all tagged, unique, anonymous.
+// A. Exactly 20 sample records — one per presentation case — all tagged, unique, anonymous.
 cases.push({
-  name: "A. seedDemoRecords returns exactly 6 uniquely-identified, tagged sample records",
+  name: "A. seedDemoRecords returns exactly 20 uniquely-identified, tagged sample records",
   run: () => {
     const records = seedDemoRecords();
     const clientIds = new Set(records.map((r) => r.client_id));
     const recordIds = new Set(records.map((r) => r.id));
     return (
-      expectEqual("record count", records.length, 6) ??
+      expectEqual("record count", records.length, 20) ??
       (records.every((r) => r.demo_record) ? null : "expected every record to have demo_record: true") ??
       (records.every((r) => r.demo_dataset_version === DEMO_DATASET_VERSION) ? null : "expected every record to carry DEMO_DATASET_VERSION") ??
-      expectEqual("unique client_id count", clientIds.size, 6) ??
-      expectEqual("unique record_id count", recordIds.size, 6) ??
+      expectEqual("unique client_id count", clientIds.size, 20) ??
+      expectEqual("unique record_id count", recordIds.size, 20) ??
       (records.every((r) => /^C-\d{3}[A-Z]$/.test(r.client_id)) ? null : "expected every client_id to match the generated C-###X pattern")
     );
   }
 });
 
-// B. Export-screen rollup: 6 records · 3 ready for export · 3 need review · 1 pending sync.
+// B. Export-screen rollup: 20 records · 9 ready for export · 11 need review · 1 pending sync.
 cases.push({
-  name: "B. Status rollup — 3 ready, 3 need review, 1 pending sync",
+  name: "B. Status rollup — 9 ready, 11 need review, 1 pending sync",
   run: () => {
     const records = seedDemoRecords();
     const needsQc = records.filter(recordNeedsQc).length;
     const pending = records.filter((r) => r.sync_status === "Pending sync").length;
     return (
-      expectEqual("needs review count", needsQc, 3) ??
-      expectEqual("ready for export count", records.length - needsQc, 3) ??
+      expectEqual("needs review count", needsQc, 11) ??
+      expectEqual("ready for export count", records.length - needsQc, 9) ??
       expectEqual("pending sync count", pending, 1)
     );
   }
@@ -122,8 +122,8 @@ cases.push({
     const table = buildOoxiiDataLonglist(records);
     const csvLines = recordsToLonglistCsv(records).trim().split("\n");
     return (
-      expectEqual("table row count", table.rows.length, 6) ??
-      expectEqual("csv line count (header + 6 records)", csvLines.length, 7)
+      expectEqual("table row count", table.rows.length, 20) ??
+      expectEqual("csv line count (header + 20 records)", csvLines.length, 21)
     );
   }
 });
@@ -138,8 +138,8 @@ cases.push({
     const fieldsPerRecord = AUDIT_FIELD_KEYS.length; // 22 tracked fields
     return (
       expectEqual("fields per record", fieldsPerRecord, 22) ??
-      expectEqual("audit row count (6 records x 22 fields)", table.rows.length, 6 * fieldsPerRecord) ??
-      expectEqual("csv line count", csvLines.length, 1 + 6 * fieldsPerRecord)
+      expectEqual("audit row count (20 records x 22 fields)", table.rows.length, 20 * fieldsPerRecord) ??
+      expectEqual("csv line count", csvLines.length, 1 + 20 * fieldsPerRecord)
     );
   }
 });
@@ -378,16 +378,16 @@ cases.push({
   }
 });
 
-// I. Aggregate insights stay consistent with the 6-record dataset.
+// I. Aggregate insights stay consistent with the 20-record dataset.
 cases.push({
   name: "I. Aggregate insights match the sample dataset",
   run: () => {
     const summary = computeInsights(seedDemoRecords());
     return (
-      expectEqual("total records", summary.totalRecords, 6) ??
-      expectEqual("needs QC count", summary.needsQcCount, 3) ??
+      expectEqual("total records", summary.totalRecords, 20) ??
+      expectEqual("needs QC count", summary.needsQcCount, 11) ??
       expectEqual("pending sync count", summary.pendingSyncCount, 1) ??
-      expectEqual("manual override count", summary.manualOverrideCount, 0)
+      expectEqual("manual override count", summary.manualOverrideCount, 1)
     );
   }
 });
@@ -409,15 +409,153 @@ cases.push({
 });
 
 /* ---------------------------------------------------------------------------
+ * K–Q — the 14 new cases added to grow the demo dataset from 6 to 20
+ * records (2026-08 expansion). Each exercises a distinct mechanic the
+ * original 6 never covered: every remaining high-risk "missing" field,
+ * single-eye astigmatism, a fully-complete optional module, manual
+ * recording override, high transcript risk, sync failure, and Local-only
+ * sync — see lib/demoRecords.ts for the full case list and rationale.
+ * ------------------------------------------------------------------------- */
+
+// K. Every high-risk field gets its own "missing" QC case somewhere in the dataset (final_readable_line already covered by C-352P/Case 3).
+cases.push({
+  name: "K. Every high-risk field has a dedicated missing-field QC case",
+  run: () => {
+    const records = seedDemoRecords();
+    const data = buildOoxiiDataLonglist(records);
+    const missingFieldCases: Array<[string, string, string]> = [
+      ["C-905L", "right_eye_line", "right eye result"],
+      ["C-127Q", "left_eye_line", "left eye result"],
+      ["C-346B", "glasses_dispensed_status", "glasses selected / dispensed"],
+      ["C-782F", "cataract_history", "cataract history"],
+      ["C-214H", "comfort_response", "comfort response"]
+    ];
+    for (const [clientId, column, phrase] of missingFieldCases) {
+      const row = dataRow(data, clientId);
+      const record = findRecord(records, clientId);
+      if (!recordNeedsQc(record)) return `expected ${clientId} to need QC`;
+      const value = String(row(column));
+      if (value !== "Missing") return `expected ${clientId} ${column} to read Missing, got "${value}"`;
+      const reason = String(row("qc_reason_summary")).toLowerCase();
+      if (!reason.includes(phrase)) return `expected ${clientId} qc_reason_summary to mention "${phrase}", got "${reason}"`;
+    }
+    return null;
+  }
+});
+
+// L. Single-eye astigmatism cases (right-only, left-only) stay QC-clean and never leak a value into the untouched eye.
+cases.push({
+  name: "L. Single-eye astigmatism (C-433Y right-only, C-720D left-only) stays QC-clean",
+  run: () => {
+    const records = seedDemoRecords();
+    const table = buildOoxiiDataLonglist(records);
+    const right = dataRow(table, "C-433Y");
+    const left = dataRow(table, "C-720D");
+    return (
+      expectEqual("C-433Y right astigmatism", right("right_astigmatism"), "Yes") ??
+      expectEqual("C-433Y left astigmatism (untouched eye)", right("left_astigmatism"), "No") ??
+      expectEqual("C-433Y left toric power (never came up)", right("left_toric_power"), "Not recorded") ??
+      expectEqual("C-720D left astigmatism", left("left_astigmatism"), "Yes") ??
+      expectEqual("C-720D right astigmatism (untouched eye)", left("right_astigmatism"), "No") ??
+      expectEqual("C-720D right toric power (never came up)", left("right_toric_power"), "Not recorded") ??
+      (recordNeedsQc(findRecord(records, "C-433Y")) ? "expected C-433Y to stay QC-clean" : null) ??
+      (recordNeedsQc(findRecord(records, "C-720D")) ? "expected C-720D to stay QC-clean" : null)
+    );
+  }
+});
+
+// M. Short-sighted module performed AND fully complete (C-186S) exports every result, contrasting with the incomplete C-560M case.
+cases.push({
+  name: "M. Short-sighted module fully complete (C-186S) exports every result, no QC",
+  run: () => {
+    const records = seedDemoRecords();
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-186S");
+    return (
+      expectEqual("short_sighted_test_performed", data("short_sighted_test_performed"), "Yes") ??
+      expectEqual("short_sighted_right_result", data("short_sighted_right_result"), "Line 4") ??
+      expectEqual("short_sighted_left_result", data("short_sighted_left_result"), "Line 4") ??
+      expectEqual("short_sighted_both_eyes_result", data("short_sighted_both_eyes_result"), "Line 4") ??
+      (recordNeedsQc(findRecord(records, "C-186S")) ? "expected C-186S to stay QC-clean" : null)
+    );
+  }
+});
+
+// N. Manual recording override (C-955V) surfaces as recording_mode "manual_override" and needs QC via the reason summary.
+cases.push({
+  name: "N. Manual override recording (C-955V) reads recording_mode 'manual_override' and needs QC",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-955V");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-955V");
+    return (
+      expectEqual("recording_status", record.recording_status, "manual_override") ??
+      expectEqual("recording_mode", data("recording_mode"), "manual_override") ??
+      (recordNeedsQc(record) ? null : "expected C-955V to need QC") ??
+      (String(data("qc_reason_summary")).toLowerCase().includes("manual recording override") ? null : `expected qc_reason_summary to mention the manual override, got "${data("qc_reason_summary")}"`)
+    );
+  }
+});
+
+// O. High transcript-quality risk + draft_review_required (C-307J) needs QC even mid-review ("In review"), never silently trusted.
+cases.push({
+  name: "O. High transcript risk (C-307J) needs QC even while already 'In review'",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-307J");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-307J");
+    return (
+      expectEqual("qc_status", record.qc_status, "In review") ??
+      expectEqual("transcript_quality_risk", record.transcript_quality_risk, "high") ??
+      expectEqual("extraction_safety_status", record.extraction_safety_status, "draft_review_required") ??
+      (recordNeedsQc(record) ? null : "expected C-307J to need QC despite being In review") ??
+      (String(data("qc_reason_summary")).toLowerCase().includes("low-confidence") ? null : `expected qc_reason_summary to mention low-confidence risk, got "${data("qc_reason_summary")}"`)
+    );
+  }
+});
+
+// P. A genuine sync FAILURE (C-644E) keeps an otherwise-Approved, otherwise-clean record flagged for QC — the one sync state that does.
+cases.push({
+  name: "P. Approved record with a failed sync (C-644E) still needs QC",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-644E");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-644E");
+    return (
+      expectEqual("qc_status", record.qc_status, "Approved") ??
+      expectEqual("sync_status", record.sync_status, "Failed") ??
+      (recordNeedsQc(record) ? null : "expected C-644E to still need QC after a failed sync") ??
+      expectEqual("qc_required", data("qc_required"), true) ??
+      (String(data("qc_reason_summary")).toLowerCase().includes("sync attempt failed") ? null : `expected qc_reason_summary to mention the failed sync, got "${data("qc_reason_summary")}"`)
+    );
+  }
+});
+
+// Q. "Local only" sync (C-521G) never blocks export on its own — distinct from "Pending sync".
+cases.push({
+  name: "Q. 'Local only' sync (C-521G) is export ready, distinct from 'Pending sync'",
+  run: () => {
+    const records = seedDemoRecords();
+    const record = findRecord(records, "C-521G");
+    const data = dataRow(buildOoxiiDataLonglist(records), "C-521G");
+    return (
+      expectEqual("sync_status", record.sync_status, "Local only") ??
+      (recordNeedsQc(record) ? "expected C-521G (Local only, Approved, clean) to be export ready" : null) ??
+      expectEqual("export_ready", data("export_ready"), true) ??
+      expectEqual("sync_status column", data("sync_status"), "local_only")
+    );
+  }
+});
+
+/* ---------------------------------------------------------------------------
  * XLSX export — lib/xlsx.ts. Same underlying records/columns as the CSV
  * longlist above; these cases cover the spreadsheet-specific surface:
  * workbook/worksheet shape, readable headers, optional-test display cells,
  * the privacy guard on the XLSX path, and the mobile file-delivery helper.
  * ------------------------------------------------------------------------- */
 
-// XLSX Test 1 — workbook shape: one worksheet, correct name, header + 6 record rows.
+// XLSX Test 1 — workbook shape: one worksheet, correct name, header + 20 record rows.
 cases.push({
-  name: "XLSX 1. Workbook has one worksheet named 'OOXii Data Longlist' with header + 6 record rows",
+  name: "XLSX 1. Workbook has one worksheet named 'OOXii Data Longlist' with header + 20 record rows",
   run: async () => {
     const workbook = await exportOoxiiDataLonglistXlsx(seedDemoRecords());
     const sheet = workbook.getWorksheet(OOXII_DATA_LONGLIST_SHEET_NAME);
@@ -425,7 +563,7 @@ cases.push({
     return (
       expectEqual("worksheet count", workbook.worksheets.length, 1) ??
       expectEqual("worksheet name", sheet.name, OOXII_DATA_LONGLIST_SHEET_NAME) ??
-      expectEqual("row count (header + 6 records)", sheet.rowCount, 7) ??
+      expectEqual("row count (header + 20 records)", sheet.rowCount, 21) ??
       expectEqual("header row frozen", sheet.views?.[0]?.state, "frozen") ??
       expectTrue("auto-filter set on the header row", Boolean(sheet.autoFilter))
     );

@@ -20,26 +20,52 @@ import type {
 
 /**
  * ---------------------------------------------------------------------------
- * Synthetic demo dataset v2 — never real client data.
+ * Synthetic demo dataset v3 — never real client data.
  * ---------------------------------------------------------------------------
- * 6 deterministic, fully-synthetic TestRecords, one per presentation case:
+ * 20 deterministic, fully-synthetic TestRecords, one per presentation case:
  *
- *   R-001 C-811W  Case 1 — clean standard wheel/paddle capture, export ready.
- *   R-002 C-274K  Case 2 — astigmatism captured both eyes (toric + axis),
- *                          reviewed, export ready.
- *   R-003 C-352P  Case 3 — final readable line missing → QC required,
- *                          evidence exists for right/left only.
- *   R-004 C-489T  Case 4 — optional short-sighted test EXPLICITLY not
- *                          performed → "Not tested", no QC pressure; saved
- *                          offline → the one pending-sync record.
- *   R-005 C-560M  Case 5 — short-sighted test performed but left result
- *                          missing → QC required with a specific reason.
- *   R-006 C-638R  Case 6 — a transcript-extracted final line was unclear;
- *                          tester corrected it in Review → source becomes
- *                          reviewed_manual_entry, original evidence preserved.
+ *   R-001 C-811W  Clean standard wheel/paddle capture, export ready.
+ *   R-002 C-274K  Astigmatism captured both eyes (toric + axis), reviewed,
+ *                 export ready. Second recording attempt (rerecord).
+ *   R-003 C-352P  Final readable line missing → QC required.
+ *   R-004 C-489T  Short-sighted test EXPLICITLY not performed → "Not
+ *                 tested", no QC pressure; saved offline → pending sync.
+ *   R-005 C-560M  Short-sighted test performed but left result missing →
+ *                 QC required with a specific reason.
+ *   R-006 C-638R  Unclear final-line value corrected by the tester in
+ *                 Review → reviewed_manual_entry, original evidence kept.
+ *   R-007 C-905L  Right eye distance result missing (high-risk field) →
+ *                 QC required.
+ *   R-008 C-127Q  Left eye distance result missing (high-risk field) →
+ *                 QC required.
+ *   R-009 C-346B  Glasses selected / dispensing outcome missing → QC
+ *                 required, no frame details (not applicable).
+ *   R-010 C-782F  Cataract history missing (never asked) → QC required.
+ *   R-011 C-214H  Comfort response missing (client left early) → QC
+ *                 required.
+ *   R-012 C-561N  Client reports "Uncomfortable" but every field is
+ *                 captured cleanly → export ready, no QC.
+ *   R-013 C-098Z  Client declined glasses (nothing dispensed) → export
+ *                 ready, frame fields "Not applicable".
+ *   R-014 C-433Y  Astigmatism in the RIGHT eye only → export ready.
+ *   R-015 C-720D  Astigmatism in the LEFT eye only → export ready.
+ *   R-016 C-186S  Short-sighted module performed AND fully complete (all
+ *                 three results) → export ready, contrasts with R-005.
+ *   R-017 C-955V  Microphone failed entirely; every field entered
+ *                 manually → recording_mode "manual_override", QC
+ *                 required, lower confidence.
+ *   R-018 C-307J  Hedged/uncertain transcript throughout → high
+ *                 transcript-quality risk + draft_review_required → QC
+ *                 required even mid-review ("In review").
+ *   R-019 C-644E  Approved and otherwise clean, but the sync attempt
+ *                 FAILED → still needs QC (the one non-Approved-safe
+ *                 sync state).
+ *   R-020 C-521G  Clean capture on a device with no Supabase configured
+ *                 → "Local only" sync, export ready (distinct from
+ *                 "Pending sync", never blocks export on its own).
  *
  * Rollup the Export screen shows for this dataset:
- *   6 records · 3 ready for export · 3 need review · 1 pending sync
+ *   20 records · 9 ready for export · 11 need review · 1 pending sync
  *
  * Every value is invented for demonstration: generated client IDs only
  * (C-811W…), tester labels only (never real names), region at city/state/
@@ -57,7 +83,7 @@ import type {
  * ---------------------------------------------------------------------------
  */
 
-export const DEMO_DATASET_VERSION = "2026-08-ooxii-demo-v2";
+export const DEMO_DATASET_VERSION = "2026-08-ooxii-demo-v3";
 
 const CREATED_AT = [
   "2026-07-29T09:00:00",
@@ -65,7 +91,21 @@ const CREATED_AT = [
   "2026-07-29T09:30:00",
   "2026-07-29T09:45:00",
   "2026-07-29T10:00:00",
-  "2026-07-29T10:15:00"
+  "2026-07-29T10:15:00",
+  "2026-07-29T10:30:00",
+  "2026-07-29T10:45:00",
+  "2026-07-29T11:00:00",
+  "2026-07-29T11:15:00",
+  "2026-07-29T11:30:00",
+  "2026-07-29T11:45:00",
+  "2026-07-29T12:00:00",
+  "2026-07-29T12:15:00",
+  "2026-07-29T12:30:00",
+  "2026-07-29T12:45:00",
+  "2026-07-29T13:00:00",
+  "2026-07-29T13:15:00",
+  "2026-07-29T13:30:00",
+  "2026-07-29T13:45:00"
 ];
 
 function field(
@@ -690,10 +730,594 @@ const SPECS: RecordSpec[] = [
     frames: { colour: "Black", size: "Medium", type: "Reading" },
     checklist: [true, true, true, false],
     sessionComment: "Transcript value corrected during review; original evidence preserved in the audit trail."
+  },
+  // Case 7 — R-007 C-905L: right eye distance result never read back
+  // (high-risk field) → Missing, QC required. Left eye/final line/comfort
+  // all captured cleanly around the gap.
+  {
+    index: 6,
+    clientId: "C-905L",
+    testerLabel: "Tester 03",
+    region: REGION_LAE,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Unreviewed",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye result was not read back before the line changed. The left eye can read line four. The final readable line is line four. The client feels comfortable. We fitted plus one point two five reading glasses.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("", "unknown", "unknown", {
+        requiresReview: true,
+        reason: "Not captured from transcript — enter manually or send to QC."
+      }),
+      left_eye_distance_result: field("Line 4", "corrected_transcript", "high", { evidence: "left eye can read line four", stepId: "left-distance" }),
+      final_readable_line: field("Line 4", "corrected_transcript", "high", { evidence: "final readable line is line four" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+1.25 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point two five reading glasses", stepId: "glasses-check" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.78,
+    ageBand: "35–44",
+    gender: "male",
+    qcNotes: "",
+    frames: { colour: "Black", size: "Medium", type: "Reading" },
+    checklist: [true, true, true, false],
+    sessionComment: "Right eye result missed before the line changed — held for QC review."
+  },
+  // Case 8 — R-008 C-127Q: left eye distance result never captured
+  // (high-risk field) → Missing, QC required.
+  {
+    index: 7,
+    clientId: "C-127Q",
+    testerLabel: "Tester 01",
+    region: REGION_PVL,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Unreviewed",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line five. The left eye result was missed while resetting the paddle. The final readable line is line five. The client feels comfortable. We fitted plus one point zero zero reading glasses.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "right eye can read line five", stepId: "right-distance" }),
+      left_eye_distance_result: field("", "unknown", "unknown", {
+        requiresReview: true,
+        reason: "Not captured from transcript — enter manually or send to QC."
+      }),
+      final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+1.00 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point zero zero reading glasses", stepId: "glasses-check" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.77,
+    ageBand: "55–64",
+    gender: "female",
+    qcNotes: "",
+    frames: { colour: "Brown", size: "Small", type: "Reading" },
+    checklist: [true, true, true, true],
+    sessionComment: "Left eye result missed resetting the paddle — held for QC review."
+  },
+  // Case 9 — R-009 C-346B: session ended before dispensing was discussed →
+  // glasses_selected Missing, QC required, frame details "Not applicable"
+  // since dispensing status itself is unknown.
+  {
+    index: 8,
+    clientId: "C-346B",
+    testerLabel: "Tester 02",
+    region: REGION_LAE,
+    language: "tpi",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Unreviewed",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line six. The left eye can read line six. With both eyes line six. The final readable line is line six. The client feels comfortable. The session ended before dispensing was discussed.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 6", "corrected_transcript", "high", { evidence: "right eye can read line six", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 6", "corrected_transcript", "high", { evidence: "left eye can read line six", stepId: "left-distance" }),
+      both_eyes_line: field("Line 6", "corrected_transcript", "high", { evidence: "with both eyes line six" }),
+      final_readable_line: field("Line 6", "corrected_transcript", "high", { evidence: "final readable line is line six" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("", "unknown", "unknown", {
+        requiresReview: true,
+        reason: "Not captured from transcript — enter manually or send to QC."
+      }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.75,
+    ageBand: "25–34",
+    gender: "male",
+    qcNotes: "",
+    checklist: [true, true, false, false],
+    sessionComment: "Session ended before dispensing was discussed — held for QC review."
+  },
+  // Case 10 — R-010 C-782F: cataract history was never asked before the
+  // client left → Missing (high-risk field), QC required.
+  {
+    index: 9,
+    clientId: "C-782F",
+    testerLabel: "Tester 01",
+    region: REGION_PVL,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Unreviewed",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. The right eye can read line five. The left eye can read line five. The final readable line is line five. The client feels comfortable. We fitted plus one point five zero reading glasses. Cataract history was never asked before the client left.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("", "unknown", "unknown", {
+        requiresReview: true,
+        reason: "Not captured from transcript — enter manually or send to QC."
+      }),
+      right_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "right eye can read line five", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "left eye can read line five", stepId: "left-distance" }),
+      final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+1.50 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point five zero reading glasses", stepId: "glasses-check" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.8,
+    ageBand: "45–54",
+    gender: "female",
+    qcNotes: "",
+    frames: { colour: "Grey", size: "Medium", type: "Reading" },
+    checklist: [true, true, true, true],
+    sessionComment: "Cataract history question was skipped before the client left — held for QC review."
+  },
+  // Case 11 — R-011 C-214H: client left before the comfort check could be
+  // asked → comfort_response Missing (high-risk field), QC required.
+  {
+    index: 10,
+    clientId: "C-214H",
+    testerLabel: "Tester 03",
+    region: REGION_LAE,
+    language: "bis",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Unreviewed",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line four. The left eye can read line four. The final readable line is line four. We fitted plus one point zero zero reading glasses. The client left before the comfort check.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 4", "corrected_transcript", "high", { evidence: "right eye can read line four", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 4", "corrected_transcript", "high", { evidence: "left eye can read line four", stepId: "left-distance" }),
+      final_readable_line: field("Line 4", "corrected_transcript", "high", { evidence: "final readable line is line four" }),
+      comfort_response: field("", "unknown", "unknown", {
+        requiresReview: true,
+        reason: "Not captured from transcript — enter manually or send to QC."
+      }),
+      glasses_selected: field("+1.00 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point zero zero reading glasses", stepId: "glasses-check" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.79,
+    ageBand: "18–24",
+    gender: "male",
+    qcNotes: "",
+    frames: { colour: "Black", size: "Small", type: "Reading" },
+    checklist: [true, false, true, true],
+    sessionComment: "Client left before the comfort check could be asked — held for QC review."
+  },
+  // Case 12 — R-012 C-561N: client reports discomfort with the fit, but
+  // every field is otherwise captured cleanly → export ready, no QC.
+  // "Uncomfortable" is a valid captured answer, not a capture failure.
+  {
+    index: 11,
+    clientId: "C-561N",
+    testerLabel: "Tester 02",
+    region: REGION_PVL,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Approved",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line five. The left eye can read line five. With both eyes line five. The final readable line is line five. The client feels uncomfortable with the fit. We fitted plus one point seven five reading glasses. Right lens selected is plus one point seven five. Left lens selected is plus one point seven five. No astigmatism in either eye.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "right eye can read line five", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "left eye can read line five", stepId: "left-distance" }),
+      both_eyes_line: field("Line 5", "corrected_transcript", "high", { evidence: "with both eyes line five" }),
+      final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
+      comfort_response: field("Uncomfortable", "corrected_transcript", "high", { evidence: "feels uncomfortable with the fit" }),
+      glasses_selected: field("+1.75 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point seven five reading glasses", stepId: "glasses-check" }),
+      right_lens_selected: field("+1.75", "corrected_transcript", "medium", { evidence: "right lens selected is plus one point seven five", stepId: "glasses-check" }),
+      left_lens_selected: field("+1.75", "corrected_transcript", "medium", { evidence: "left lens selected is plus one point seven five", stepId: "glasses-check" }),
+      right_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "no astigmatism in either eye" }),
+      left_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "no astigmatism in either eye" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.91,
+    ageBand: "55–64",
+    gender: "male",
+    qcNotes: "Discomfort noted and passed to the dispensing team for a refit follow-up; capture itself is complete and accurate.",
+    frames: { colour: "Blue", size: "Large", type: "Reading" },
+    checklist: [true, true, true, true],
+    sessionComment: "Client reported discomfort with the fit but every field was captured cleanly — flagged for a refit follow-up, not QC."
+  },
+  // Case 13 — R-013 C-098Z: client declined glasses after a clean capture
+  // → glasses_selected "No glasses dispensed", frame fields "Not
+  // applicable", export ready, no QC.
+  {
+    index: 12,
+    clientId: "C-098Z",
+    testerLabel: "Tester 01",
+    region: REGION_LAE,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Approved",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client does not currently have glasses. No history of cataracts. The right eye can read line six. The left eye can read line six. With both eyes line six. The final readable line is line six. The client feels comfortable. The client declined glasses today.",
+    fields: {
+      current_glasses: field("No", "corrected_transcript", "high", { evidence: "does not currently have glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 6", "corrected_transcript", "high", { evidence: "right eye can read line six", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 6", "corrected_transcript", "high", { evidence: "left eye can read line six", stepId: "left-distance" }),
+      both_eyes_line: field("Line 6", "corrected_transcript", "high", { evidence: "with both eyes line six" }),
+      final_readable_line: field("Line 6", "corrected_transcript", "high", { evidence: "final readable line is line six" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("No glasses dispensed", "corrected_transcript", "medium", { evidence: "client declined glasses today", stepId: "glasses-check" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.93,
+    ageBand: "25–34",
+    gender: "female",
+    qcNotes: "",
+    checklist: [true, true, true, true],
+    sessionComment: "Client declined glasses after a clean capture — nothing further to dispense."
+  },
+  // Case 14 — R-014 C-433Y: astigmatism confirmed in the RIGHT eye only →
+  // export ready, no QC.
+  {
+    index: 13,
+    clientId: "C-433Y",
+    testerLabel: "Tester 02",
+    region: REGION_PVL,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Approved",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line five. The left eye can read line five. The final readable line is line five. The client feels comfortable. We fitted distance glasses. Right lens selected is plus one point two five. Left lens selected is plus one point two five. Right eye has astigmatism T1 axis forty five. Left eye has no astigmatism.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "right eye can read line five", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "left eye can read line five", stepId: "left-distance" }),
+      final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("Distance glasses", "corrected_transcript", "medium", { evidence: "fitted distance glasses", stepId: "glasses-check" }),
+      right_lens_selected: field("+1.25", "corrected_transcript", "medium", { evidence: "right lens selected is plus one point two five", stepId: "glasses-check" }),
+      left_lens_selected: field("+1.25", "corrected_transcript", "medium", { evidence: "left lens selected is plus one point two five", stepId: "glasses-check" }),
+      right_astigmatism_present: field("Yes", "corrected_transcript", "high", { evidence: "right eye has astigmatism t1 axis forty five" }),
+      right_toric_power: field("T1", "corrected_transcript", "high", { evidence: "astigmatism t1" }),
+      right_toric_axis: field("45", "corrected_transcript", "high", { evidence: "axis forty five" }),
+      left_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "left eye has no astigmatism" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.9,
+    ageBand: "45–54",
+    gender: "female",
+    qcNotes: "",
+    frames: { colour: "Tortoiseshell", size: "Medium", type: "Distance" },
+    checklist: [true, true, true, true],
+    sessionComment: "Astigmatism confirmed in the right eye only — left eye clear."
+  },
+  // Case 15 — R-015 C-720D: astigmatism confirmed in the LEFT eye only →
+  // export ready, no QC.
+  {
+    index: 14,
+    clientId: "C-720D",
+    testerLabel: "Tester 01",
+    region: REGION_LAE,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Approved",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line six. The left eye can read line five. The final readable line is line five. The client feels comfortable. We fitted distance glasses. Right lens selected is plus one point zero zero. Left lens selected is plus one point five zero. Right eye has no astigmatism. Left eye has astigmatism T2 axis one hundred ten.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 6", "corrected_transcript", "high", { evidence: "right eye can read line six", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "left eye can read line five", stepId: "left-distance" }),
+      final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("Distance glasses", "corrected_transcript", "medium", { evidence: "fitted distance glasses", stepId: "glasses-check" }),
+      right_lens_selected: field("+1.00", "corrected_transcript", "medium", { evidence: "right lens selected is plus one point zero zero", stepId: "glasses-check" }),
+      left_lens_selected: field("+1.50", "corrected_transcript", "medium", { evidence: "left lens selected is plus one point five zero", stepId: "glasses-check" }),
+      right_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "right eye has no astigmatism" }),
+      left_astigmatism_present: field("Yes", "corrected_transcript", "high", { evidence: "left eye has astigmatism t2 axis one hundred ten" }),
+      left_toric_power: field("T2", "corrected_transcript", "high", { evidence: "astigmatism t2" }),
+      left_toric_axis: field("110", "corrected_transcript", "high", { evidence: "axis one hundred ten" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.9,
+    ageBand: "35–44",
+    gender: "male",
+    qcNotes: "",
+    frames: { colour: "Black", size: "Medium", type: "Distance" },
+    checklist: [true, true, true, true],
+    sessionComment: "Astigmatism confirmed in the left eye only — right eye clear."
+  },
+  // Case 16 — R-016 C-186S: short-sighted module performed AND every
+  // result captured → export ready, no QC. Contrasts with R-005 (Case 5),
+  // where the same module is performed but incomplete.
+  {
+    index: 15,
+    clientId: "C-186S",
+    testerLabel: "Tester 02",
+    region: REGION_PVL,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "Approved",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line five. The left eye can read line five. The final readable line is line five. The client feels comfortable. We fitted plus one point zero zero reading glasses. Short-sighted test performed. Short-sighted right eye line four. Short-sighted left eye line four. Short-sighted both eyes line four.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "right eye can read line five", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "left eye can read line five", stepId: "left-distance" }),
+      final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+1.00 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point zero zero reading glasses", stepId: "glasses-check" }),
+      short_sighted_test_performed: field("Yes", "corrected_transcript", "high", { evidence: "short-sighted test performed" }),
+      short_sighted_right_result: field("Line 4", "corrected_transcript", "high", { evidence: "short-sighted right eye line four" }),
+      short_sighted_left_result: field("Line 4", "corrected_transcript", "high", { evidence: "short-sighted left eye line four" }),
+      short_sighted_both_eyes_result: field("Line 4", "corrected_transcript", "high", { evidence: "short-sighted both eyes line four" })
+    },
+    confidenceScore: 0.92,
+    ageBand: "25–34",
+    gender: "male",
+    qcNotes: "",
+    frames: { colour: "Green", size: "Medium", type: "Reading" },
+    checklist: [true, true, true, true],
+    sessionComment: "Short-sighted module completed in full — every result captured."
+  },
+  // Case 17 — R-017 C-955V: the microphone failed for the whole session;
+  // every field was entered manually from the tester's notes afterward →
+  // recording_mode "manual_override", QC required, lower confidence.
+  {
+    index: 16,
+    clientId: "C-955V",
+    testerLabel: "Tester 03",
+    region: REGION_LAE,
+    language: "en",
+    recordingStatus: "manual_override",
+    extractionSource: "manual_override",
+    syncStatus: "Synced",
+    qcStatus: "Unreviewed",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    requiresQcVerification: true,
+    rawTranscriptText:
+      "Manual entry after microphone failure: client already had glasses, no cataract history, right eye line five, left eye line four, final line four, comfortable, fitted plus one point two five reading glasses.",
+    fields: {
+      current_glasses: field("Yes", "manual", "high"),
+      cataract_history_confirmed: field("No", "manual", "high"),
+      right_eye_distance_result: field("Line 5", "manual", "high"),
+      left_eye_distance_result: field("Line 4", "manual", "high"),
+      final_readable_line: field("Line 4", "manual", "high"),
+      comfort_response: field("Comfortable", "manual", "high"),
+      glasses_selected: field("+1.25 reading glasses", "manual", "medium"),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.55,
+    ageBand: "65+",
+    gender: "female",
+    qcNotes: "Recorder failed to start; tester completed the session verbally and entered results manually afterward.",
+    frames: { colour: "Black", size: "Medium", type: "Reading" },
+    checklist: [true, false, true, false],
+    sessionComment: "Microphone failed for the whole session — every field entered manually, held for QC."
+  },
+  // Case 18 — R-018 C-307J: the transcript hedges throughout ("maybe",
+  // "hard to tell", "I think") → high transcript-quality risk and
+  // draft_review_required extraction safety, QC required even though
+  // review is already under way ("In review").
+  {
+    index: 17,
+    clientId: "C-307J",
+    testerLabel: "Tester 01",
+    region: REGION_PVL,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Synced",
+    qcStatus: "In review",
+    editedByUser: false,
+    transcriptQualityRisk: "high",
+    extractionSafetyStatus: "draft_review_required",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client maybe already has glasses, hard to tell. No history of cataracts, I think. The right eye can read line four, or maybe five. The left eye can read line four. The final readable line is line four. The client feels comfortable. We fitted plus one point two five reading glasses.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "low", {
+        evidence: "client maybe already has glasses, hard to tell",
+        requiresReview: true,
+        reason: "Hedged, uncertain phrasing detected in the transcript — verify against the audio."
+      }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "low", {
+        evidence: "no history of cataracts, i think",
+        requiresReview: true,
+        reason: "Hedged, uncertain phrasing detected in the transcript — verify against the audio."
+      }),
+      right_eye_distance_result: field("Line 4", "corrected_transcript", "low", {
+        evidence: "right eye can read line four, or maybe five",
+        stepId: "right-distance",
+        requiresReview: true,
+        reason: "Hedged, uncertain phrasing detected in the transcript — verify against the audio."
+      }),
+      left_eye_distance_result: field("Line 4", "corrected_transcript", "high", { evidence: "left eye can read line four", stepId: "left-distance" }),
+      final_readable_line: field("Line 4", "corrected_transcript", "high", { evidence: "final readable line is line four" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+1.25 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point two five reading glasses", stepId: "glasses-check" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.62,
+    ageBand: "55–64",
+    gender: "male",
+    qcNotes: "Multiple hedged/uncertain phrases throughout — flagged high transcript-quality risk; tester is re-listening to the audio before approving.",
+    frames: { colour: "Grey", size: "Large", type: "Reading" },
+    checklist: [true, true, true, true],
+    sessionComment: "Transcript carries several hedged phrases — held for careful audio re-check before approval."
+  },
+  // Case 19 — R-019 C-644E: approved on-site and otherwise clean, but the
+  // sync attempt to Supabase FAILED → still needs QC. Demonstrates that a
+  // genuine sync failure is the one sync state that keeps even an Approved
+  // record flagged (see needsQcFor above).
+  {
+    index: 18,
+    clientId: "C-644E",
+    testerLabel: "Tester 02",
+    region: REGION_LAE,
+    language: "en",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Failed",
+    qcStatus: "Approved",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line five. The left eye can read line five. With both eyes line five. The final readable line is line five. The client feels comfortable. We fitted plus one point zero zero reading glasses.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "right eye can read line five", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 5", "corrected_transcript", "high", { evidence: "left eye can read line five", stepId: "left-distance" }),
+      both_eyes_line: field("Line 5", "corrected_transcript", "high", { evidence: "with both eyes line five" }),
+      final_readable_line: field("Line 5", "corrected_transcript", "high", { evidence: "final readable line is line five" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+1.00 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus one point zero zero reading glasses", stepId: "glasses-check" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.93,
+    ageBand: "45–54",
+    gender: "female",
+    qcNotes: "Approved on-site; the sync attempt to Supabase failed and needs to be retried before this can leave the QC queue.",
+    frames: { colour: "Black", size: "Medium", type: "Reading" },
+    checklist: [true, true, true, true],
+    sessionComment: "Clean capture, approved on-site — sync to the shared database failed and needs a retry."
+  },
+  // Case 20 — R-020 C-521G: clean capture on a device with no Supabase
+  // configured → "Local only" sync status, export ready. Distinct from
+  // "Pending sync" (Case 4): Local only never blocks export on its own.
+  {
+    index: 19,
+    clientId: "C-521G",
+    testerLabel: "Tester 03",
+    region: REGION_PVL,
+    language: "bis",
+    recordingStatus: "recorded",
+    extractionSource: "corrected_transcript",
+    syncStatus: "Local only",
+    qcStatus: "Approved",
+    editedByUser: false,
+    transcriptQualityRisk: "low",
+    extractionSafetyStatus: "safe",
+    rerecordUsed: false,
+    recordingAttemptNumber: 1,
+    rawTranscriptText:
+      "The client already has glasses. No history of cataracts. The right eye can read line six. The left eye can read line six. With both eyes line six. The final readable line is line six. The client feels comfortable. We fitted plus two point zero zero reading glasses. Right lens selected is plus two point zero zero. Left lens selected is plus one point seven five. No astigmatism in either eye.",
+    fields: {
+      current_glasses: field("Yes", "corrected_transcript", "high", { evidence: "already has glasses" }),
+      cataract_history_confirmed: field("No", "corrected_transcript", "high", { evidence: "no history of cataracts" }),
+      right_eye_distance_result: field("Line 6", "corrected_transcript", "high", { evidence: "right eye can read line six", stepId: "right-distance" }),
+      left_eye_distance_result: field("Line 6", "corrected_transcript", "high", { evidence: "left eye can read line six", stepId: "left-distance" }),
+      both_eyes_line: field("Line 6", "corrected_transcript", "high", { evidence: "with both eyes line six" }),
+      final_readable_line: field("Line 6", "corrected_transcript", "high", { evidence: "final readable line is line six" }),
+      comfort_response: field("Comfortable", "corrected_transcript", "high", { evidence: "feels comfortable" }),
+      glasses_selected: field("+2.00 reading glasses", "corrected_transcript", "medium", { evidence: "fitted plus two point zero zero reading glasses", stepId: "glasses-check" }),
+      right_lens_selected: field("+2.00", "corrected_transcript", "medium", { evidence: "right lens selected is plus two point zero zero", stepId: "glasses-check" }),
+      left_lens_selected: field("+1.75", "corrected_transcript", "medium", { evidence: "left lens selected is plus one point seven five", stepId: "glasses-check" }),
+      right_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "no astigmatism in either eye" }),
+      left_astigmatism_present: field("No", "corrected_transcript", "high", { evidence: "no astigmatism in either eye" }),
+      ...SHORT_SIGHTED_NOT_MENTIONED
+    },
+    confidenceScore: 0.95,
+    ageBand: "65+",
+    gender: "male",
+    qcNotes: "",
+    frames: { colour: "Brown", size: "Large", type: "Reading" },
+    checklist: [true, true, true, true],
+    sessionComment: "Clean capture on a device with no Supabase configured — stays Local only by design, never mislabeled as pending."
   }
 ];
 
-/** Builds the 6 deterministic synthetic demo records (one per presentation case). Pure — does not touch storage; see appendDemoRecords in lib/storage.ts for persistence. */
+/** Builds the 20 deterministic synthetic demo records (one per presentation case). Pure — does not touch storage; see appendDemoRecords in lib/storage.ts for persistence. */
 export function seedDemoRecords(): TestRecord[] {
   return SPECS.map(buildRecord);
 }
